@@ -1,5 +1,6 @@
-const playerService = require('../../services/playerService');
-const matchService  = require('../../services/matchService');
+const playerService    = require('../../services/playerService');
+const matchService     = require('../../services/matchService');
+const teamPoolService  = require('../../services/teamPoolService');
 
 // Read desired start‑match pool size from env, default to 10
 const POOL_SIZE = process.env.START_POOL_SIZE
@@ -17,48 +18,63 @@ module.exports = {
     }
     const userId = profile.id;
 
-    // 2) Fetch the current unified match
+    // ───────────────────────────────────────────────────────
+    // 2) Infinite “create teams” pool takes priority if open
+    const infPool = await teamPoolService.getPool();
+    if (infPool) {
+      // try to sign into the infinite pool
+      const res = await teamPoolService.signToPool(userId);
+      if (typeof res === 'string') {
+        if (res === 'no-pool')       return message.channel.send('❌ No active team‑creation pool.');
+        if (res === 'already-signed') return message.channel.send('⚠️ You are already in that pool.');
+      } else {
+        return message.channel.send(`✅ Signed into the team‑creation pool (${res.count} signed).`);
+      }
+    }
+    // ───────────────────────────────────────────────────────
+
+    // 3) Fetch the current unified match (challenge or start)
     const activeMatch = await matchService.getCurrentMatch();
     if (!activeMatch) {
       return message.channel.send('❌ No active match to sign up for.');
     }
 
-    // 3) Challenge-specific guards
+    // 4) Challenge‑specific guards
     if (activeMatch.type === 'challenge') {
-      // 3a) Must be accepted first
+      // 4a) Must be accepted first
       if (activeMatch.status !== 'waiting') {
         return message.channel.send(
           '⚠️ Challenge not yet accepted. Please wait for the challenged player to `!accept`.'
         );
       }
-      // 3b) Captains may not sign
+      // 4b) Captains may not sign
       if (userId === activeMatch.captain1 || userId === activeMatch.captain2) {
         return message.channel.send('❌ Captains cannot sign into the challenge pool.');
       }
-      // 3c) Once picks start, no more sign-ups
+      // 4c) Once picks start, no more sign‑ups
       const { picks } = activeMatch;
       if (picks.radiant.length + picks.dire.length > 0) {
         return message.channel.send('⚠️ Picking has already begun—you can no longer sign up.');
       }
     }
 
-    // 4) Prevent duplicate sign‑ups
+    // 5) Prevent duplicate sign‑ups
     if (activeMatch.pool.includes(userId)) {
       return message.channel.send('⚠️ You are already signed up.');
     }
 
-    // 5) Attempt to sign into the pool
+    // 6) Attempt to sign into the (challenge or start) pool
     const result = await matchService.signToPool(userId);
 
-    // 6) Handle string error codes
+    // 7) Handle string error codes
     if (typeof result === 'string') {
-      if (result === 'no-match')        return message.channel.send('❌ No active match.');
-      if (result === 'already-signed')  return message.channel.send('⚠️ You are already signed up.');
-      if (result === 'pool-full')       return message.channel.send('⚠️ The start match pool is already full.');
-      if (result === 'pool-error')      return message.channel.send('❌ An error occurred finalizing the pool.');
+      if (result === 'no-match')       return message.channel.send('❌ No active match.');
+      if (result === 'already-signed') return message.channel.send('⚠️ You are already signed up.');
+      if (result === 'pool-full')      return message.channel.send('⚠️ The start match pool is already full.');
+      if (result === 'pool-error')     return message.channel.send('❌ An error occurred finalizing the pool.');
     }
 
-    // 7) If pool still filling, show correct count formatting
+    // 8) If pool still filling, show correct count formatting
     if (result.status !== 'ready') {
       if (activeMatch.type === 'start') {
         return message.channel.send(
@@ -71,11 +87,11 @@ module.exports = {
       }
     }
 
-    // 8) === MATCH FINALIZED ===
+    // 9) === MATCH FINALIZED ===
     const { teams, finalized } = result;
     const formatTeam = team => team.map(id => `• \`${id}\``).join('\n');
 
-    // Spoiler‑tag lobby info
+    // Wrap lobby info in spoilers
     const lobbySpoiler    = `||\`${finalized.lobbyName}\`||`;
     const passwordSpoiler = `||\`${finalized.password}\`||`;
 
