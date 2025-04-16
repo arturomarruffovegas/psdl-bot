@@ -309,62 +309,112 @@ async function submitResult(userId, captainId, resultTeam) {
   if (!doc.exists) return { error: 'no-match' };
   const data = doc.data();
 
-  if (!['radiant', 'dire'].includes(resultTeam))
+  if (!['radiant', 'dire'].includes(resultTeam)) {
     return { error: 'invalid-team' };
+  }
 
+  // --- Challenge flow ---
   if (data.type === 'challenge') {
-    if (![data.captain1, data.captain2].includes(captainId))
+    // Only captains may report
+    if (![data.captain1, data.captain2].includes(captainId)) {
       return { error: 'not-captain' };
-
-    await ref.update({ winner: resultTeam });
-    const winnerTeam = resultTeam === 'radiant' ? data.radiant : data.dire;
-    const loserTeam = resultTeam === 'radiant' ? data.dire : data.radiant;
-    const pointDelta = 25;
-    const batch = db.batch();
-
-    for (const pid of winnerTeam.players.concat(winnerTeam.captain)) {
-      const userRef = db.collection('players').doc(pid);
-      const snap = await userRef.get();
-      if (snap.exists) {
-        const points = snap.data().points || 1000;
-        batch.update(userRef, { points: points + pointDelta });
-      }
     }
-    for (const pid of loserTeam.players.concat(loserTeam.captain)) {
-      const userRef = db.collection('players').doc(pid);
-      const snap = await userRef.get();
-      if (snap.exists) {
-        const points = snap.data().points || 1000;
-        batch.update(userRef, { points: points - pointDelta });
-      }
+
+    // Rebuild teams from picks
+    const winnerTeam = resultTeam === 'radiant'
+      ? { captain: data.captain1, players: data.picks.radiant }
+      : { captain: data.captain2, players: data.picks.dire };
+    const loserTeam = resultTeam === 'radiant'
+      ? { captain: data.captain2, players: data.picks.dire }
+      : { captain: data.captain1, players: data.picks.radiant };
+
+    // Record winner and adjust points
+    await ref.update({ winner: resultTeam });
+    const batch = db.batch(), delta = 25;
+    for (const pid of [...winnerTeam.players, winnerTeam.captain]) {
+      const uref = db.collection('players').doc(pid);
+      const snap = await uref.get();
+      if (snap.exists) batch.update(uref, { points: (snap.data().points || 1000) + delta });
+    }
+    for (const pid of [...loserTeam.players, loserTeam.captain]) {
+      const uref = db.collection('players').doc(pid);
+      const snap = await uref.get();
+      if (snap.exists) batch.update(uref, { points: (snap.data().points || 1000) - delta });
     }
     await batch.commit();
+
+    // Tear down the in‑flight match
     await ref.delete();
     return { matchId: doc.id, winner: resultTeam };
-  } else if (data.type === 'start') {
-    if (!data.votes) data.votes = { radiant: [], dire: [] };
-    if (data.votes.radiant.includes(userId) || data.votes.dire.includes(userId))
-      return { error: 'already-voted' };
+  }
 
+  // --- Start flow ---
+  if (data.type === 'start') {
+    // Initialize votes if missing
+    if (!data.votes) data.votes = { radiant: [], dire: [] };
+    // Prevent double votes
+    if (data.votes.radiant.includes(userId) || data.votes.dire.includes(userId)) {
+      return { error: 'already-voted' };
+    }
+    // Only participants may vote
+    const participants = [...data.teams.radiant, ...data.teams.dire];
+    if (!participants.includes(userId)) {
+      return { error: 'not-participant' };
+    }
+
+    // Record vote
     data.votes[resultTeam].push(userId);
     await ref.update({ votes: data.votes });
 
+    // Finalize once 6 votes on one side
     if (data.votes[resultTeam].length >= 6) {
       await ref.update({ winner: resultTeam });
-      const finalizedRecord = {
+      const finalRec = {
         createdAt: new Date().toISOString(),
         radiant: { players: data.teams.radiant },
         dire: { players: data.teams.dire },
         winner: resultTeam,
-        lobbyName: generateLobbyName(),
-        password: generatePassword()
+        lobbyName: data.lobbyName,
+        password: data.password
       };
-      await db.collection('finalizedMatches').add(finalizedRecord);
+      // Persist into permanent store
+      await db.collection('finalizedMatches').add(finalRec);
+      // Tear down current
       await ref.delete();
-      return { status: 'finalized', winner: resultTeam, match: finalizedRecord };
+      return { status: 'finalized', winner: resultTeam, match: finalRec };
     }
+
     return { status: 'pending', votes: data.votes };
   }
+}
+
+/**
+ * Remove a user from the current match's pool.
+ */
+async function removeFromPool(userId) {
+  const ref = db.collection('matches').doc('current');
+  const doc = await ref.get();
+  if (!doc.exists) return 'no-match';
+  const data = doc.data();
+
+  // In a challenge, once picking has started you can no longer leave
+  if (data.type === 'challenge' &&
+      (data.picks.radiant.length + data.picks.dire.length) > 0) {
+    return 'picking-started';
+  }
+  // In a start match, once it's ready you can no longer leave
+  if (data.type === 'start' && data.status === 'ready') {
+    return 'match-ready';
+  }
+
+  if (!data.pool.includes(userId)) {
+    return 'not-signed';
+  }
+
+  // Remove them and persist
+  const newPool = data.pool.filter(id => id !== userId);
+  await ref.update({ pool: newPool });
+  return 'unsigned';
 }
 
 module.exports = {
@@ -373,5 +423,6 @@ module.exports = {
   signToPool,
   abortMatch,
   pickPlayer,
-  submitResult
+  submitResult,
+  removeFromPool
 };

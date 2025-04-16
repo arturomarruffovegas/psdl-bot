@@ -76,43 +76,50 @@ async function pickPlayer(captainId, userId) {
     const data = doc.data();
     const { picks, pool, captain1, captain2 } = data;
 
+    // validation
     if (!pool.includes(userId)) return { error: 'not-in-pool' };
     if (![captain1, captain2].includes(captainId)) return { error: 'not-captain' };
 
     const radiant = picks.radiant;
     const dire = picks.dire;
-
     const isRadiantTurn = radiant.length === dire.length;
     const isCaptainTurn =
         (isRadiantTurn && captainId === captain1) ||
         (!isRadiantTurn && captainId === captain2);
-
     if (!isCaptainTurn) return { error: 'not-your-turn' };
 
+    // Assign pick
     if (isRadiantTurn) radiant.push(userId);
     else dire.push(userId);
 
+    // Remove from pool
     const newPool = pool.filter(id => id !== userId);
-    const MAX_PICKS = process.env.MAX_PICKS ? parseInt(process.env.MAX_PICKS) : 10;
+
+    // ── NEW: stop at 8 total picks for a 5v5 ──
+    const TOTAL_PLAYERS = process.env.MAX_PLAYERS
+        ? parseInt(process.env.MAX_PLAYERS, 10)
+        : 10;
+    const PICKS_NEEDED = TOTAL_PLAYERS - 2;  // subtract 2 captains
 
     let finalized = null;
-    if (radiant.length + dire.length === MAX_PICKS) {
-        finalized = {
-            lobbyName: generateLobbyName(),
-            password: generatePassword(),
-            status: 'ready'
-        };
+    if (radiant.length + dire.length === PICKS_NEEDED) {
+        // time to finalize a 5v5
+        const lobbyName = generateLobbyName();
+        const password = generatePassword();
+        finalized = { lobbyName, password, status: 'ready' };
 
+        // persist into your permanent matches collection
         await db.collection('matches').add({
             createdAt: new Date().toISOString(),
             radiant: { captain: captain1, players: radiant },
             dire: { captain: captain2, players: dire },
             winner: null,
-            lobbyName: finalized.lobbyName,
-            password: finalized.password
+            lobbyName,
+            password
         });
     }
 
+    // write back the in‑flight challenge
     await ref.update({
         pool: newPool,
         picks,
