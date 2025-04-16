@@ -323,9 +323,9 @@ async function submitResult(userId, captainId, resultTeam) {
 
     // Rebuild teams from picks
     const radiantTeam = { captain: data.captain1, players: data.picks.radiant };
-    const direTeam    = { captain: data.captain2, players: data.picks.dire };
-    const winnerTeam  = resultTeam === 'radiant' ? radiantTeam : direTeam;
-    const loserTeam   = resultTeam === 'radiant' ? direTeam    : radiantTeam;
+    const direTeam = { captain: data.captain2, players: data.picks.dire };
+    const winnerTeam = resultTeam === 'radiant' ? radiantTeam : direTeam;
+    const loserTeam = resultTeam === 'radiant' ? direTeam : radiantTeam;
 
     // Mark the winner on the match
     await ref.update({ winner: resultTeam });
@@ -369,11 +369,17 @@ async function submitResult(userId, captainId, resultTeam) {
       return { error: 'already-voted' };
     }
 
+    // only participants may vote
+    const participants = [...data.teams.radiant, ...data.teams.dire];
+    if (!participants.includes(userId)) {
+      return { error: 'not-participant' };
+    }
+
     // record vote
     data.votes[resultTeam].push(userId);
     await ref.update({ votes: data.votes });
 
-    // finalize once 6 votes reached
+    // finalize once threshold reached
     if (data.votes[resultTeam].length >= 6) {
       await ref.update({ winner: resultTeam });
 
@@ -381,18 +387,20 @@ async function submitResult(userId, captainId, resultTeam) {
       const finalRec = {
         createdAt: new Date().toISOString(),
         radiant: { players: data.teams.radiant },
-        dire:    { players: data.teams.dire },
-        winner:  resultTeam,
+        dire: { players: data.teams.dire },
+        winner: resultTeam,
         lobbyName: data.lobbyName,
-        password:  data.password
+        password: data.password
       };
-      await db.collection('finalizedMatches').add(finalRec);
+
+      // write to permanent store and capture the new doc ID
+      const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
       // Adjust points for start-match participants
       const batch = db.batch();
       const delta = 25;
       const winnerIds = data.teams[resultTeam];
-      const loserIds  = data.teams[resultTeam === 'radiant' ? 'dire' : 'radiant'];
+      const loserIds = data.teams[resultTeam === 'radiant' ? 'dire' : 'radiant'];
 
       // Winners +25
       for (const pid of winnerIds) {
@@ -416,7 +424,14 @@ async function submitResult(userId, captainId, resultTeam) {
 
       await batch.commit();
       await ref.delete();
-      return { status: 'finalized', winner: resultTeam, match: finalRec };
+
+      // include matchId in the return payload
+      return {
+        status: 'finalized',
+        winner: resultTeam,
+        match: finalRec,
+        matchId: finalDocRef.id
+      };
     }
 
     return { status: 'pending', votes: data.votes };
@@ -436,7 +451,7 @@ async function removeFromPool(userId) {
 
   // In a challenge, once picking has started you can no longer leave
   if (data.type === 'challenge' &&
-      (data.picks.radiant.length + data.picks.dire.length) > 0) {
+    (data.picks.radiant.length + data.picks.dire.length) > 0) {
     return 'picking-started';
   }
   // In a start match, once it's ready you can no longer leave
