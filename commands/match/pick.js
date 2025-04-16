@@ -20,8 +20,9 @@ module.exports = {
       if (result.error === 'not-in-pool') return message.channel.send('⚠️ That player is not in the pool.');
       return message.channel.send('❌ An error occurred during picking.');
     }
+
     const summary = `✅ \`${pickId}\` has been picked for the **${result.team} Team**.`;
-    
+
     if (result.finalized) {
       const snapshot = await db.collection('matches').doc('current').get();
       const data = snapshot.data();
@@ -33,17 +34,23 @@ module.exports = {
             return `• \`${id}\`${tag}`;
           }).join('\n');
       };
+
+      // Wrap lobby and password in Discord spoiler tags
+      const lobbySpoiler    = `||\`${result.finalized.lobbyName}\`||`;
+      const passwordSpoiler = `||\`${result.finalized.password}\`||`;
+
       return message.channel.send(
         `${summary}\n\n🎮 **Match Ready!**\n` +
         `🟢 ${formatTeam(picks.radiant, 'Radiant', data.captain1)}\n\n` +
         `🔴 ${formatTeam(picks.dire, 'Dire', data.captain2)}\n\n` +
-        `🧩 Lobby: \`${result.finalized.lobbyName}\`\n🔐 Password: \`${result.finalized.password}\`\n` +
+        `🧩 Lobby: ${lobbySpoiler}\n` +
+        `🔐 Password: ${passwordSpoiler}\n` +
         `Captains must now report the result using \`!result radiant\` or \`!result dire\`.`
       );
     }
+
     // Otherwise, indicate whose turn is next.
-    const ref = db.collection('matches').doc('current');
-    const snapshot = await ref.get();
+    const snapshot = await db.collection('matches').doc('current').get();
     const data = snapshot.data();
     const nextCaptain = result.team === 'Radiant' ? data.captain2 : data.captain1;
     return message.channel.send(`${summary}\n🎯 **${nextCaptain}**, it's your turn to pick.`);
