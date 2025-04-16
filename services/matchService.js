@@ -167,6 +167,10 @@ async function signToPool(userId) {
       ? parseInt(process.env.START_POOL_SIZE, 10)
       : 10;
 
+    // 🔍 DEBUG LOG
+    console.log('⚙️  START_POOL_SIZE env var:', process.env.START_POOL_SIZE,
+      '→ POOL_SIZE used in code:', POOL_SIZE);
+
     if (data.pool.length > POOL_SIZE) return 'pool-full';
 
     // Persist the updated pool
@@ -186,7 +190,7 @@ async function signToPool(userId) {
 
       // Generate lobby details
       const lobbyName = generateLobbyName();
-      const password  = generatePassword();
+      const password = generatePassword();
 
       // Update match status
       await ref.update({
