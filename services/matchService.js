@@ -158,29 +158,65 @@ async function signToPool(userId) {
   // Ensure the user is not already in the pool.
   if (data.pool.includes(userId)) return 'already-signed';
 
+  // Add the user
   data.pool.push(userId);
 
   if (data.type === 'start') {
-    if (data.pool.length > 10) return 'pool-full';
+    // Read pool size from ENV (default to 10)
+    const POOL_SIZE = process.env.START_POOL_SIZE
+      ? parseInt(process.env.START_POOL_SIZE, 10)
+      : 10;
+
+    if (data.pool.length > POOL_SIZE) return 'pool-full';
+
+    // Persist the updated pool
     await ref.update({ pool: data.pool });
-    if (data.pool.length === 10) {
-      // Fetch detailed profiles for all 10 players.
-      const players = await Promise.all(data.pool.map(id => playerService.getPlayerProfileById(id)));
-      const validPlayers = players.filter(p => p); // remove nulls if any
-      if (validPlayers.length !== 10) return 'pool-error';
+
+    // Finalize when we hit exactly POOL_SIZE
+    if (data.pool.length === POOL_SIZE) {
+      // Fetch detailed profiles for all players
+      const players = await Promise.all(
+        data.pool.map(id => playerService.getPlayerProfileById(id))
+      );
+      const validPlayers = players.filter(p => p);
+      if (validPlayers.length !== POOL_SIZE) return 'pool-error';
+
+      // Balance teams
       const teams = balanceStartTeams(validPlayers);
+
+      // Generate lobby details
+      const lobbyName = generateLobbyName();
+      const password  = generatePassword();
+
+      // Update match status
       await ref.update({
         teams: teams,
-        status: 'ready'
+        status: 'ready',
+        lobbyName,
+        password
       });
-      return { status: 'ready', teams: teams };
+
+      return {
+        status: 'ready',
+        teams,
+        finalized: { lobbyName, password }
+      };
     }
-    return { status: data.status, count: data.pool.length };
+
+    // If not yet full, return the current count
+    return {
+      status: data.status,
+      count: data.pool.length,
+      poolSize: POOL_SIZE
+    };
   }
 
-  // For a challenge match, simply update the pool.
+  // Challenge match branch
   await ref.update({ pool: data.pool });
-  return { status: data.status, count: data.pool.length };
+  return {
+    status: data.status,
+    count: data.pool.length
+  };
 }
 
 /**
