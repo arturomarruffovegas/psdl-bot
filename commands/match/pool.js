@@ -15,21 +15,20 @@ module.exports = {
             return message.channel.send('⚠️ No players have signed up yet.');
         }
 
+        // Fetch all player profiles once so we can look up role & tier
+        const allPlayers = await playerService.fetchAllPlayers();
+        const poolDetails = pool.map(id => {
+            const p = allPlayers.find(u => u.id === id);
+            return p
+                ? `• \`${p.id}\` — (${p.role.toUpperCase()} - T${p.tier})`
+                : `• \`${id}\` — (Unknown)`;
+        }).join('\n');
+
         let response = '';
         if (currentMatch.type === 'challenge') {
-            // For challenge matches, show detailed info from player records.
-            const allPlayers = await playerService.fetchAllPlayers();
-            const poolDetails = pool.map(id => {
-                const p = allPlayers.find(u => u.id === id);
-                return p
-                    ? `• \`${p.id}\` (${p.role.toUpperCase()} - T${p.tier})`
-                    : `• \`${id}\` (Unknown)`;
-            });
-            response = `🧩 **Current Challenge Pool (${pool.length})**\n${poolDetails.join('\n')}`;
+            response = `🧩 **Current Challenge Pool (${pool.length})**\n${poolDetails}`;
         } else if (currentMatch.type === 'start') {
-            // For start matches, simply list the signed-in IDs and show the cap.
-            response = `🧩 **Current Start Match Pool (${pool.length}/10)**\n` +
-                pool.map(id => `• \`${id}\``).join('\n');
+            response = `🧩 **Current Start Match Pool (${pool.length}/10)**\n${poolDetails}`;
         } else {
             response = '⚠️ Active match has an unrecognized type.';
         }
