@@ -1,8 +1,7 @@
-// challenge.js
-const db = require('./firebase');
+const db = require('./db');
 
 function generateLobbyName() {
-    const randomNum = Math.floor(100000 + Math.random() * 900000); // 6-digit number
+    const randomNum = Math.floor(100000 + Math.random() * 900000);
     return `PSDL-${randomNum}`;
 }
 
@@ -11,32 +10,23 @@ function generatePassword() {
 }
 
 async function createChallenge(challenger, challenged) {
-    console.log('[createChallenge] Called with:');
-    console.log('  challenger:', challenger);
-    console.log('  challenged:', challenged);
-
-    if (!challenger || !challenged) {
-        throw new Error('Both challenger and challenged must be provided');
-    }
-
     const ref = db.collection('challenges').doc('current');
     const doc = await ref.get();
+    if (doc.exists) return null;
 
-    if (doc.exists) {
-        console.log('[createChallenge] A challenge is already in progress.');
-        return null;
-    }
+    // Assign the challenger and challenged explicitly.
+    const captain1 = challenger;
+    const captain2 = challenged;
 
     const data = {
         startedAt: new Date().toISOString(),
-        captain1: challenger,
-        captain2: challenged,
+        captain1,
+        captain2,
         pool: [],
         picks: { radiant: [], dire: [] },
         status: 'pending'
     };
 
-    console.log('[createChallenge] Saving challenge to Firestore:', data);
     await ref.set(data);
     return data;
 }
@@ -49,7 +39,6 @@ async function signToPool(userId) {
 
     if (data.pool.includes(userId)) return 'already-signed';
 
-    // ✅ Check if the user is already in an ongoing match (no result yet)
     const matches = await db.collection('matches')
         .where('winner', '==', null)
         .get();
@@ -100,16 +89,14 @@ async function pickPlayer(captainId, userId) {
 
     if (!isCaptainTurn) return { error: 'not-your-turn' };
 
-    // Assign to team
     if (isRadiantTurn) radiant.push(userId);
     else dire.push(userId);
 
-    // Remove from pool
     const newPool = pool.filter(id => id !== userId);
+    const MAX_PICKS = process.env.MAX_PICKS ? parseInt(process.env.MAX_PICKS) : 10;
 
-    // If full teams, finalize match
     let finalized = null;
-    if (radiant.length === 5 && dire.length === 5) {
+    if (radiant.length + dire.length === MAX_PICKS) {
         finalized = {
             lobbyName: generateLobbyName(),
             password: generatePassword(),
@@ -138,34 +125,47 @@ async function pickPlayer(captainId, userId) {
     };
 }
 
-async function submitResult(captainId, resultTeam) {
-    const ref = db.collection('challenges').doc('current');
-    const doc = await ref.get();
-    if (!doc.exists) return { error: 'no-challenge' };
+async function submitResult(matchId, captainId, resultTeam) {
+    if (!['radiant', 'dire'].includes(resultTeam)) {
+        return { error: 'invalid-team' };
+    }
 
-    const data = doc.data();
-    const { captain1, captain2 } = data;
+    const matchDocRef = db.collection('matches').doc(matchId);
+    const matchSnap = await matchDocRef.get();
+    if (!matchSnap.exists) return { error: 'match-not-found' };
 
-    if (![captain1, captain2].includes(captainId)) return { error: 'not-captain' };
-    if (!['radiant', 'dire'].includes(resultTeam)) return { error: 'invalid-team' };
+    const matchData = matchSnap.data();
+    const { radiant, dire } = matchData;
 
-    // Add result to matches
-    const matchRef = db.collection('matches')
-        .where('radiant.captain', '==', captain1)
-        .where('dire.captain', '==', captain2)
-        .orderBy('createdAt', 'desc')
-        .limit(1);
+    if (![radiant.captain, dire.captain].includes(captainId)) {
+        return { error: 'not-captain' };
+    }
 
-    const matchSnap = await matchRef.get();
-    if (matchSnap.empty) return { error: 'match-not-found' };
+    await matchDocRef.update({ winner: resultTeam });
 
-    const matchDoc = matchSnap.docs[0];
-    await matchDoc.ref.update({ winner: resultTeam });
+    const winnerTeam = resultTeam === 'radiant' ? radiant : dire;
+    const loserTeam = resultTeam === 'radiant' ? dire : radiant;
+    const pointChange = 25;
 
-    // Clear current challenge
-    await ref.delete();
+    const adjustPoints = async (userId, delta) => {
+        const userRef = db.collection('players').doc(userId);
+        const userSnap = await userRef.get();
+        if (!userSnap.exists) return;
+        const current = userSnap.data().points ?? 1000;
+        await userRef.update({ points: current + delta });
+    };
 
-    return { winner: resultTeam };
+    for (const id of winnerTeam.players.concat(winnerTeam.captain)) {
+        await adjustPoints(id, pointChange);
+    }
+
+    for (const id of loserTeam.players.concat(loserTeam.captain)) {
+        await adjustPoints(id, -pointChange);
+    }
+
+    await db.collection('challenges').doc('current').delete();
+
+    return { matchId, winner: resultTeam };
 }
 
 module.exports = {
