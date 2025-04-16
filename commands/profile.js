@@ -14,8 +14,8 @@ module.exports = {
 
             return message.channel.send(
                 `🧾 **Profile for \`${userId}\`**\n` +
-                `• **Name**: ${player.name}\n` +
-                `• **Email**: ${player.email}\n` +
+                // `• **Name**: ${player.name}\n` +
+                // `• **Email**: ${player.email}\n` +
                 `• **Discord Tag**: ${player.discordTag ?? 'N/A'}\n` +
                 `• **Dota ID**: ${player.dotaId}\n` +
                 `• **Role**: ${player.role.toUpperCase()}\n` +
