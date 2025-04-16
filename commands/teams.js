@@ -1,68 +1,94 @@
-// commands/match/teams.js
+// commands/teams.js
 const { EmbedBuilder } = require('discord.js');
-const playerService = require('../../services/playerService');
-const matchService  = require('../../services/matchService');
+const playerService   = require('../services/playerService');
+const matchService    = require('../services/matchService');
+const teamPoolService = require('../services/teamPoolService');
 
 module.exports = {
   name: '!teams',
   async execute(message) {
-    // 1) Fetch current active match
+    // 1) Try an active challenge or start match first
     const match = await matchService.getCurrentMatch();
-    if (!match) {
-      return message.channel.send('⚠️ No active match in progress.');
-    }
+    if (match) {
+      if (match.type === 'challenge') {
+        const { captain1, captain2, picks, status } = match;
+        if (status === 'pending') {
+          return message.channel.send('⚠️ Challenge not yet accepted.');
+        }
+        const radiant = [captain1, ...picks.radiant];
+        const dire    = [captain2, ...picks.dire];
+        const all     = await playerService.fetchAllPlayers();
 
-    // 2) Prepare the two team arrays and a title depending on match type
-    let radiantIds = [], direIds = [], title = '';
-    if (match.type === 'challenge') {
-      // During a challenge pre‑pick or post‑pick state:
-      const { captain1, captain2, picks, status } = match;
-      // If status still pending, nobody’s accepted yet:
-      if (status === 'pending') {
-        return message.channel.send('⚠️ Challenge not yet accepted.');
-      }
-      radiantIds = [captain1, ...picks.radiant];
-      direIds    = [captain2, ...picks.dire];
-      title      = '📝 Current Challenge Teams';
-    } else if (match.type === 'start') {
-      // For start matches only once they’re “ready”:
-      if (match.status !== 'ready') {
-        return message.channel.send('⚠️ Start match not ready yet. Waiting on sign‑ups.');
-      }
-      radiantIds = match.teams.radiant;
-      direIds    = match.teams.dire;
-      title      = '📝 Current Start Match Teams';
-    } else {
-      return message.channel.send('⚠️ Unknown match type.');
-    }
-
-    // 3) Fetch all players for role/tier lookup
-    const allPlayers = await playerService.fetchAllPlayers();
-
-    // 4) Build embed fields
-    const makeField = (ids, label) => ({
-      name: label,
-      value: ids.length
-        ? ids.map(id => {
-            const p = allPlayers.find(u => u.id === id);
+        const makeField = (ids, cap, label) => ({
+          name: label,
+          value: ids.map(id => {
+            const p     = all.find(u => u.id === id);
+            const crown = id === cap ? ' 👑' : '';
             return p
-              ? `• \`${p.id}\` — (${p.role.toUpperCase()} - T${p.tier}${id === (label.includes('Radiant') ? radiantIds[0] : direIds[0]) ? ' 👑' : ''})`
-              : `• \`${id}\``;
-          }).join('\n')
-        : '_No players_',
-      inline: true
-    });
+              ? `• \`${p.id}\`${crown} — (${p.role.toUpperCase()}‑T${p.tier})`
+              : `• \`${id}\`${crown}`;
+          }).join('\n'),
+          inline: true
+        });
 
-    // 5) Construct and send the embed
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .addFields(
-        makeField(radiantIds, '🟢 Radiant'),
-        makeField(direIds,    '🔴 Dire')
-      )
-      .setFooter({ text: 'Use !pick to continue picking or !sign to join.' })
-      .setTimestamp();
+        const embed = new EmbedBuilder()
+          .setTitle('📝 Challenge Teams')
+          .setColor(0x0099FF)
+          .addFields(
+            makeField(radiant, captain1, '🟢 Radiant'),
+            makeField(dire,    captain2, '🔴 Dire')
+          )
+          .setTimestamp();
 
-    return message.channel.send({ embeds: [embed] });
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      if (match.type === 'start') {
+        if (match.status !== 'ready') {
+          return message.channel.send('⚠️ Start match not ready yet.');
+        }
+        const { radiant, dire } = match.teams;
+        const makeField = (ids, label) => ({
+          name: label,
+          value: ids.map(id => `• \`${id}\``).join('\n'),
+          inline: true
+        });
+        const embed = new EmbedBuilder()
+          .setTitle('📝 Start Match Teams')
+          .setColor(0x00CC66)
+          .addFields(
+            makeField(radiant, '🟢 Radiant'),
+            makeField(dire,    '🔴 Dire')
+          )
+          .setTimestamp();
+
+        return message.channel.send({ embeds: [embed] });
+      }
+
+      return message.channel.send('⚠️ Active match has an unrecognized type.');
+    }
+
+    // 2) Fallback to any created infinite pool split
+    const teams = await teamPoolService.getSplitResult?.();
+    if (teams) {
+      const makeField = (ids, label) => ({
+        name: label,
+        value: ids.map(id => `• \`${id}\``).join('\n'),
+        inline: true
+      });
+      const embed = new EmbedBuilder()
+        .setTitle('📝 Picked Teams')
+        .setColor(0x663399)
+        .addFields(
+          makeField(teams.radiant, '🟢 Radiant'),
+          makeField(teams.dire,    '🔴 Dire')
+        )
+        .setTimestamp();
+
+      return message.channel.send({ embeds: [embed] });
+    }
+
+    // 3) Nothing to show
+    return message.channel.send('⚠️ No teams to display right now.');
   }
 };
