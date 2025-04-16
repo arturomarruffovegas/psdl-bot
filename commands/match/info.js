@@ -1,4 +1,4 @@
-// commands/match/info.js
+const { EmbedBuilder } = require('discord.js');
 const db = require('../../services/db');
 
 module.exports = {
@@ -20,7 +20,7 @@ module.exports = {
     }
 
     const data = snap.data();
-    // createdAt for archived, or startedAt for a lingering current
+    // timestamp: use createdAt (archive) or startedAt (if still lingering)
     const ts = data.createdAt || data.startedAt;
     const playedAtText = ts
       ? `<t:${Math.floor(new Date(ts).getTime() / 1000)}:F>`
@@ -30,50 +30,35 @@ module.exports = {
       ? `\`${data.winner.toUpperCase()}\``
       : 'Pending Result';
 
-    // Helper to format either challenge or start‐style teams
-    const formatTeam = (teamObj, label) => {
+    // Helper: format each side for the embed field
+    const formatTeam = (teamObj) => {
       const lines = [];
       if (teamObj.captain) {
-        lines.push(`Captain: \`${teamObj.captain}\``);
+        lines.push(`👑 \`${teamObj.captain}\``);
       }
       const players = Array.isArray(teamObj.players) ? teamObj.players : [];
-      lines.push('Players:');
-      if (players.length) {
-        for (const p of players) {
-          lines.push(`• \`${p}\``);
-        }
-      } else {
-        lines.push('No players listed');
+      for (const p of players) {
+        lines.push(`• \`${p}\``);
       }
-      return `**${label} Team**\n${lines.join('\n')}`;
+      return lines.length ? lines.join('\n') : 'No players listed';
     };
 
-    const radiantSection = data.radiant
-      ? formatTeam(data.radiant, 'Radiant')
-      : '⚠️ Radiant team data missing';
-    const direSection    = data.dire
-      ? formatTeam(data.dire, 'Dire')
-      : '⚠️ Dire team data missing';
+    // build embed
+    const embed = new EmbedBuilder()
+      .setTitle(`📜 Match \`${matchId}\``)
+      .setColor(0xFFA500)
+      .addFields(
+        { name: '🕓 Played at', value: playedAtText, inline: true },
+        { name: '🏆 Winner',    value: winnerText,   inline: true },
+        // blank spacer
+        { name: '\u200B',       value: '\u200B' },
+        // Radiant field
+        { name: '🟢 Radiant', value: data.radiant ? formatTeam(data.radiant) : '—', inline: true },
+        // Dire field
+        { name: '🔴 Dire',    value: data.dire    ? formatTeam(data.dire)    : '—', inline: true }
+      )
+      .setTimestamp();
 
-    // Show lobby/password if they exist
-    const lobbyLine = data.lobbyName ? `🧩 Lobby: \`${data.lobbyName}\`` : '';
-    const passLine  = data.password  ? `🔐 Password: \`${data.password}\`` : '';
-
-    const out = [
-      `📜 **Match \`${matchId}\`**`,
-      `🕓 Played at: ${playedAtText}`,
-      `🏆 Winner: ${winnerText}`,
-      '',
-      radiantSection,
-      '',
-      direSection,
-      lobbyLine && '',
-      lobbyLine,
-      passLine
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    return message.channel.send(out);
+    return message.channel.send({ embeds: [embed] });
   }
 };
