@@ -32,8 +32,8 @@ module.exports = {
 
         return message.channel.send(
             `🧾 **Your Profile**\n` +
-            `• **Name**: ${player.name}\n` +
-            `• **Email**: ${player.email}\n` +
+            // `• **Name**: ${player.name}\n` +
+            // `• **Email**: ${player.email}\n` +
             `• **User ID**: \`${player.id}\`\n` +
             `• **Dota ID**: ${player.dotaId}\n` +
             `• **Role**: ${player.role.toUpperCase()}\n` +
