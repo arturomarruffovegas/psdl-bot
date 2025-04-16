@@ -7,9 +7,26 @@ const teamPoolService = require('../services/teamPoolService');
 module.exports = {
   name: '!teams',
   async execute(message) {
-    // 1) Try an active challenge or start match first
+    // fetch all players once for lookups
+    const all = await playerService.fetchAllPlayers();
+
+    // helper: format each id with role/tier (+ crown if captain)
+    const makeField = (ids, label, captainId = null) => ({
+      name: label,
+      value: ids.map(id => {
+        const p     = all.find(u => u.id === id);
+        const crown = id === captainId ? ' 👑' : '';
+        return p
+          ? `• \`${p.id}\`${crown} — (${p.role.toUpperCase()} - T${p.tier})`
+          : `• \`${id}\`${crown} — (Unknown)`;
+      }).join('\n'),
+      inline: true
+    });
+
+    // 1) Challenge or start match?
     const match = await matchService.getCurrentMatch();
     if (match) {
+      // --- Challenge
       if (match.type === 'challenge') {
         const { captain1, captain2, picks, status } = match;
         if (status === 'pending') {
@@ -17,42 +34,26 @@ module.exports = {
         }
         const radiant = [captain1, ...picks.radiant];
         const dire    = [captain2, ...picks.dire];
-        const all     = await playerService.fetchAllPlayers();
-
-        const makeField = (ids, cap, label) => ({
-          name: label,
-          value: ids.map(id => {
-            const p     = all.find(u => u.id === id);
-            const crown = id === cap ? ' 👑' : '';
-            return p
-              ? `• \`${p.id}\`${crown} — (${p.role.toUpperCase()}‑T${p.tier})`
-              : `• \`${id}\`${crown}`;
-          }).join('\n'),
-          inline: true
-        });
 
         const embed = new EmbedBuilder()
           .setTitle('📝 Challenge Teams')
           .setColor(0x0099FF)
           .addFields(
-            makeField(radiant, captain1, '🟢 Radiant'),
-            makeField(dire,    captain2, '🔴 Dire')
+            makeField(radiant, '🟢 Radiant', captain1),
+            makeField(dire,    '🔴 Dire',    captain2)
           )
           .setTimestamp();
 
         return message.channel.send({ embeds: [embed] });
       }
 
+      // --- Start
       if (match.type === 'start') {
         if (match.status !== 'ready') {
           return message.channel.send('⚠️ Start match not ready yet.');
         }
         const { radiant, dire } = match.teams;
-        const makeField = (ids, label) => ({
-          name: label,
-          value: ids.map(id => `• \`${id}\``).join('\n'),
-          inline: true
-        });
+        // no captainId here, so omit third arg
         const embed = new EmbedBuilder()
           .setTitle('📝 Start Match Teams')
           .setColor(0x00CC66)
@@ -68,20 +69,16 @@ module.exports = {
       return message.channel.send('⚠️ Active match has an unrecognized type.');
     }
 
-    // 2) Fallback to any created infinite pool split
-    const teams = await teamPoolService.getSplitResult?.();
-    if (teams) {
-      const makeField = (ids, label) => ({
-        name: label,
-        value: ids.map(id => `• \`${id}\``).join('\n'),
-        inline: true
-      });
+    // 2) Fallback to infinite‑pool split
+    const split = await teamPoolService.getSplitResult?.();
+    if (split) {
+      const { radiant, dire } = split;
       const embed = new EmbedBuilder()
         .setTitle('📝 Picked Teams')
         .setColor(0x663399)
         .addFields(
-          makeField(teams.radiant, '🟢 Radiant'),
-          makeField(teams.dire,    '🔴 Dire')
+          makeField(radiant, '🟢 Radiant'),
+          makeField(dire,    '🔴 Dire')
         )
         .setTimestamp();
 

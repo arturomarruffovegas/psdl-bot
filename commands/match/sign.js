@@ -89,7 +89,18 @@ module.exports = {
 
     // 9) === MATCH FINALIZED ===
     const { teams, finalized } = result;
-    const formatTeam = team => team.map(id => `• \`${id}\``).join('\n');
+
+    // fetch all players for lookup
+    const allPlayers = await playerService.fetchAllPlayers();
+    // format each team member with role and tier
+    const formatTeam = ids => ids
+      .map(id => {
+        const p = allPlayers.find(u => u.id === id);
+        return p
+          ? `• \`${p.id}\` — (${p.role.toUpperCase()} - T${p.tier})`
+          : `• \`${id}\``;
+      })
+      .join('\n');
 
     // Wrap lobby info in spoilers
     const lobbySpoiler    = `||\`${finalized.lobbyName}\`||`;
