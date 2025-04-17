@@ -281,44 +281,66 @@ async function pickPlayer(captainId, userId) {
   if (data.type !== 'challenge') return { error: 'not-applicable' };
 
   const { picks, pool, captain1, captain2 } = data;
+  // 1) must be in pool
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
+  // 2) must be a captain
   if (![captain1, captain2].includes(captainId)) return { error: 'not-captain' };
 
+  // determine whose turn it is
   const radiant = picks.radiant;
-  const dire = picks.dire;
+  const dire    = picks.dire;
   const isRadiantTurn = radiant.length === dire.length;
-  const isCaptainTurn =
-    (isRadiantTurn && captainId === captain1) ||
-    (!isRadiantTurn && captainId === captain2);
-  if (!isCaptainTurn) return { error: 'not-your-turn' };
+  const whoseTurn = isRadiantTurn ? captain1 : captain2;
+  if (captainId !== whoseTurn) return { error: 'not-your-turn' };
 
+  // perform the pick
   if (isRadiantTurn) radiant.push(userId);
   else dire.push(userId);
 
+  // remove from pool
   const newPool = pool.filter(id => id !== userId);
-  const MAX_PICKS = process.env.MAX_PICKS ? parseInt(process.env.MAX_PICKS) : 10;
-  let finalized = null;
+
+  // how many total picks before finalizing?
+  const MAX_PICKS = process.env.MAX_PICKS
+    ? parseInt(process.env.MAX_PICKS, 10)
+    : 10;
+
+  // 3) if we've now picked MAX_PICKS players, finalize
   if (radiant.length + dire.length === MAX_PICKS) {
-    finalized = {
-      lobbyName: generateLobbyName(),
-      password: generatePassword(),
-      status: 'ready'
-    };
+    // generate lobby & password
+    const lobbyName = generateLobbyName();
+    const password  = generatePassword();
+
+    // archive into finalizedMatches
     await db.collection('finalizedMatches').add({
       createdAt: new Date().toISOString(),
       radiant: { captain: captain1, players: radiant },
-      dire: { captain: captain2, players: dire },
-      winner: null,
-      lobbyName: finalized.lobbyName,
-      password: finalized.password
+      dire:    { captain: captain2, players: dire },
+      winner:  null,
+      lobbyName,
+      password
     });
+
+    // delete the “current” so new matches can be created
+    await ref.delete();
+
+    // return to the command so it can send the “Match Ready!” message
+    return {
+      team:     isRadiantTurn ? 'Radiant' : 'Dire',
+      finalized: { lobbyName, password }
+    };
   }
+
+  // 4) otherwise, just update the in‑flight draft
   await ref.update({
     pool: newPool,
-    picks: picks,
-    ...(finalized || {})
+    picks
   });
-  return { team: isRadiantTurn ? 'Radiant' : 'Dire', finalized };
+
+  return {
+    team:     isRadiantTurn ? 'Radiant' : 'Dire',
+    finalized: null
+  };
 }
 
 /**
