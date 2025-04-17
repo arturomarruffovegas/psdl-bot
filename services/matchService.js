@@ -90,54 +90,89 @@ function getCombinations(arr, k) {
  *
  * Returns an object { radiant: [...], dire: [...] } with arrays of player IDs.
  */
+/**
+ * Given an array of 10 player objects (each with properties: id, role, tier),
+ * partition them into two teams of 5 such that:
+ *  - Ideally, each team has 3 cores and 2 supports.
+ *  - The weighted sums of their tiers are as balanced as possible
+ *    (cores count as 1.3× their tier, supports as 1× their tier).
+ *
+ * Returns an object { radiant: [...], dire: [...] } with arrays of player IDs.
+ */
 function balanceStartTeams(players) {
+  const CORE_WEIGHT = 1.3;
   const combinations = getCombinations(players, 5);
   let bestPartition = null;
   let bestCompError = Infinity;
   let bestTierDiff = Infinity;
 
-  // Helper: count roles and sum tiers for a given team (array of player objects).
+  // Helper: count roles and compute weighted sum tiers for a given team.
   function evaluateTeam(team) {
-    let cores = 0, supports = 0, sumTiers = 0;
+    let cores = 0;
+    let supports = 0;
+    let sumTiers = 0;
     for (const p of team) {
-      if (p.role.toLowerCase() === 'core') cores++;
-      else if (p.role.toLowerCase() === 'support') supports++;
-      sumTiers += p.tier;
+      if (p.role.toLowerCase() === 'core') {
+        cores++;
+        sumTiers += p.tier * CORE_WEIGHT;
+      } else if (p.role.toLowerCase() === 'support') {
+        supports++;
+        sumTiers += p.tier;
+      }
     }
     return { cores, supports, sumTiers };
   }
 
   for (const team1 of combinations) {
-    // team2 is the complement of team1 within players.
     const team1Ids = new Set(team1.map(p => p.id));
     const team2 = players.filter(p => !team1Ids.has(p.id));
-    if (team2.length !== 5) continue; // Should always be true.
+    if (team2.length !== 5) continue;
+
     const eval1 = evaluateTeam(team1);
     const eval2 = evaluateTeam(team2);
-    // Composition error: deviation from ideal: 3 cores and 2 supports per team.
-    const compError = Math.abs(eval1.cores - 3) + Math.abs(eval1.supports - 2) +
-      Math.abs(eval2.cores - 3) + Math.abs(eval2.supports - 2);
+
+    // Composition error vs ideal 3 cores & 2 supports
+    const compError = Math.abs(eval1.cores - 3)
+      + Math.abs(eval1.supports - 2)
+      + Math.abs(eval2.cores - 3)
+      + Math.abs(eval2.supports - 2);
+
+    // Tier difference on weighted sums
     const tierDiff = Math.abs(eval1.sumTiers - eval2.sumTiers);
 
-    // Prefer partitions with lower composition error; then lower tier difference.
-    if (compError < bestCompError || (compError === bestCompError && tierDiff < bestTierDiff)) {
-      bestPartition = { team1: team1.map(p => p.id), team2: team2.map(p => p.id) };
+    if (
+      compError < bestCompError ||
+      (compError === bestCompError && tierDiff < bestTierDiff)
+    ) {
+      bestPartition = {
+        team1: team1.map(p => p.id),
+        team2: team2.map(p => p.id)
+      };
       bestCompError = compError;
       bestTierDiff = tierDiff;
     }
   }
 
   if (!bestPartition) {
-    // Fallback: simple random assignment.
+    // fallback random split
     const shuffled = players.slice().sort(() => Math.random() - 0.5);
-    return { radiant: shuffled.slice(0, 5).map(p => p.id), dire: shuffled.slice(5, 10).map(p => p.id) };
+    return {
+      radiant: shuffled.slice(0, 5).map(p => p.id),
+      dire: shuffled.slice(5, 10).map(p => p.id)
+    };
   }
 
-  // Randomly decide which partition becomes Radiant and which becomes Dire.
+  // randomly assign which partition is Radiant
   if (Math.random() < 0.5) {
-    return { radiant: bestPartition.team1, dire: bestPartition.team2 };
+    return {
+      radiant: bestPartition.team1,
+      dire: bestPartition.team2
+    };
   } else {
-    return { radiant: bestPartition.team2, dire: bestPartition.team1 };
+    return {
+      radiant: bestPartition.team2,
+      dire: bestPartition.team1
+    };
   }
 }
 
