@@ -321,29 +321,31 @@ async function pickPlayer(captainId, userId) {
   const { picks, pool, captain1, captain2 } = data;
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
 
-  const radiant  = picks.radiant;
-  const dire     = picks.dire;
-  const isRadTurn= radiant.length === dire.length;
-  const expected = isRadTurn ? captain1 : captain2;
+  const radiant = picks.radiant;
+  const dire    = picks.dire;
+  const isRadTurn = radiant.length === dire.length;
+  const expected  = isRadTurn ? captain1 : captain2;
   if (captainId !== expected) return { error: 'not-your-turn' };
 
-  // perform the pick
+  // 1) Ejecutar el pick
   if (isRadTurn) radiant.push(userId);
   else            dire.push(userId);
 
+  // 2) Quitar al jugador del pool
   const newPool = pool.filter(id => id !== userId);
 
+  // 3) Cambiar default a 8 picks (4+4)
   const MAX_PICKS = process.env.MAX_PICKS
     ? parseInt(process.env.MAX_PICKS, 10)
-    : 10;
+    : 8;
 
-  // if we just completed 5v5:
+  // 4) Si llegó al tope, finalizamos
   if (radiant.length + dire.length === MAX_PICKS) {
-    const teams = { radiant: [...radiant], dire: [...dire] };
+    const teams     = { radiant: [...radiant], dire: [...dire] };
     const lobbyName = generateLobbyName();
     const password  = generatePassword();
 
-    // archive into finalizedMatches
+    // Archivar en finalizedMatches
     await db.collection('finalizedMatches').add({
       createdAt: new Date().toISOString(),
       radiant:   { captain: captain1, players: teams.radiant },
@@ -353,7 +355,7 @@ async function pickPlayer(captainId, userId) {
       password
     });
 
-    // tear down the live draft so new matches can begin immediately
+    // Borrar el documento “current” para liberar el sistema
     await ref.delete();
 
     return {
@@ -362,7 +364,7 @@ async function pickPlayer(captainId, userId) {
     };
   }
 
-  // otherwise still in draft mode
+  // 5) Si aún no, actualizamos picks y pool
   await ref.update({ pool: newPool, picks });
   return {
     team:      isRadTurn ? 'Radiant' : 'Dire',
