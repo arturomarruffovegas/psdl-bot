@@ -1,11 +1,11 @@
-// commands/match/last10.js
-const playerService = require('../../services/playerService');
-const db = require('../../services/db');
+// commands/last10.js
+const playerService = require('../services/playerService');
+const db            = require('../services/db');
 
 module.exports = {
   name: '!last10',
   async execute(message) {
-    // 1) Make sure you’re registered
+    // 1) Lookup the user’s internal ID.
     const profile = await playerService.getPlayerProfileByUsername(
       message.author.username.toLowerCase()
     );
@@ -14,64 +14,42 @@ module.exports = {
     }
     const userId = profile.id;
 
-    const entries = [];
+    // 2) Query the finalizedMatches archive for any games you participated in.
+    const fm = db.collection('finalizedMatches');
+    const [radSnap, direSnap] = await Promise.all([
+      fm.where('radiant.players', 'array-contains', userId)
+        .orderBy('createdAt', 'desc')
+        .limit(10)
+        .get(),
+      fm.where('dire.players', 'array-contains', userId)
+        .orderBy('createdAt', 'desc')
+        .limit(10)
+        .get()
+    ]);
 
-    // 2) Pull recent challenge matches from `matches`
-    const challengeSnaps = await db
-      .collection('matches')
-      .orderBy('createdAt', 'desc')
-      .limit(50)
-      .get();
-    challengeSnaps.docs.forEach((doc) => {
-      const data = doc.data();
-      const participants = [
-        data.radiant?.captain,
-        ...(data.radiant?.players || []),
-        data.dire?.captain,
-        ...(data.dire?.players || []),
-      ];
-      if (participants.includes(userId)) {
-        entries.push({ id: doc.id, ts: data.createdAt });
-      }
-    });
+    // 3) Merge & dedupe, then sort by date desc and take up to 10.
+    const allDocs = [...radSnap.docs, ...direSnap.docs];
+    const uniq = new Map();
+    allDocs.forEach(doc => uniq.set(doc.id, doc));
+    const latest = Array.from(uniq.values())
+      .sort((a, b) =>
+        new Date(b.data().createdAt) - new Date(a.data().createdAt)
+      )
+      .slice(0, 10);
 
-    // 3) Pull recent start matches from `finalizedMatches`
-    const startSnaps = await db
-      .collection('finalizedMatches')
-      .orderBy('createdAt', 'desc')
-      .limit(50)
-      .get();
-    startSnaps.docs.forEach((doc) => {
-      const data = doc.data();
-      const participants = [
-        ...(data.radiant?.players || []),
-        ...(data.dire?.players || []),
-      ];
-      if (participants.includes(userId)) {
-        entries.push({ id: doc.id, ts: data.createdAt });
-      }
-    });
-
-    // 4) Sort by timestamp, dedupe, and take up to 10
-    entries.sort((a, b) => new Date(b.ts) - new Date(a.ts));
-    const seen = new Set();
-    const lastIds = [];
-    for (const e of entries) {
-      if (!seen.has(e.id)) {
-        seen.add(e.id);
-        lastIds.push(e.id);
-        if (lastIds.length === 10) break;
-      }
+    if (latest.length === 0) {
+      return message.channel.send('⚠️ You have no recorded matches.');
     }
 
-    if (!lastIds.length) {
-      return message.channel.send('⚠️ No recorded matches found.');
-    }
+    // 4) Build the reply listing match IDs (and optional winner).
+    const lines = latest.map(doc => {
+      const data = doc.data();
+      const win  = data.winner ? data.winner.toUpperCase() : 'PENDING';
+      return `• \`${doc.id}\` (${win})`;
+    });
 
-    // 5) Reply with the list
     return message.channel.send(
-      `🕹️ **Your last ${lastIds.length} matches:**\n` +
-      lastIds.map(id => `• \`${id}\``).join('\n')
+      `📜 **Your Last ${lines.length} Matches:**\n${lines.join('\n')}`
     );
-  },
+  }
 };
