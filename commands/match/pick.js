@@ -18,7 +18,7 @@ module.exports = {
 
     // Attempt the pick
     const result = await matchService.pickPlayer(profile.id, pickId);
-
+ 
     // Error handling
     if (result.error) {
       switch (result.error) {
