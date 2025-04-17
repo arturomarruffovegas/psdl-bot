@@ -99,46 +99,75 @@ function getCombinations(arr, k) {
  *
  * Returns an object { radiant: [...], dire: [...] } with arrays of player IDs.
  */
+/**
+ * Dado un arreglo de 10 jugadores (cada uno con { id, role, tier }),
+ * reparte en dos equipos de 5 procurando:
+ *  - Ideal: 3 cores y 2 supports.
+ *  - Los cores cuentan doble (CORE_WEIGHT = 2) que los supports.
+ *  - Cuando un soporte deba jugar de core (faltan cores) o un core deba jugar de support (faltan supports),
+ *    se les penaliza reduciendo su tier en 1 para el cálculo.
+ */
 function balanceStartTeams(players) {
-  const CORE_WEIGHT = 1.3;
-  const combinations = getCombinations(players, 5);
+  const CORE_WEIGHT = 2;
+  const IDEAL_CORES = 3;
+  const IDEAL_SUPPORTS = 2;
+
+  const combinations = getCombinations(players, IDEAL_CORES + IDEAL_SUPPORTS);
   let bestPartition = null;
   let bestCompError = Infinity;
   let bestTierDiff = Infinity;
 
-  // Helper: count roles and compute weighted sum tiers for a given team.
   function evaluateTeam(team) {
+    // 1) contar roles
     let cores = 0;
     let supports = 0;
+    for (const p of team) {
+      if (p.role.toLowerCase() === 'core') cores++;
+      else supports++;
+    }
+
+    // 2) determinar cuántos deben cubrir rol ajeno
+    let needCore    = Math.max(0, IDEAL_CORES - cores);    // soportes que jugarán de core
+    let needSupport = Math.max(0, IDEAL_SUPPORTS - supports); // cores que jugarán de support
+
+    // 3) calcular suma de tiers con penalización
     let sumTiers = 0;
     for (const p of team) {
-      if (p.role.toLowerCase() === 'core') {
-        cores++;
-        sumTiers += p.tier * CORE_WEIGHT;
-      } else if (p.role.toLowerCase() === 'support') {
-        supports++;
-        sumTiers += p.tier;
+      let effectiveTier = p.tier;
+      if (p.role.toLowerCase() === 'support' && needCore > 0) {
+        effectiveTier = Math.max(1, effectiveTier - 1);
+        needCore--;
+      } else if (p.role.toLowerCase() === 'core' && needSupport > 0) {
+        effectiveTier = Math.max(1, effectiveTier - 1);
+        needSupport--;
       }
+      // aplicar peso
+      sumTiers += p.role.toLowerCase() === 'core'
+        ? effectiveTier * CORE_WEIGHT
+        : effectiveTier;
     }
+
     return { cores, supports, sumTiers };
   }
 
   for (const team1 of combinations) {
+    // calcular team2 complementario
     const team1Ids = new Set(team1.map(p => p.id));
     const team2 = players.filter(p => !team1Ids.has(p.id));
-    if (team2.length !== 5) continue;
+    if (team2.length !== IDEAL_CORES + IDEAL_SUPPORTS) continue;
 
-    const eval1 = evaluateTeam(team1);
-    const eval2 = evaluateTeam(team2);
+    const e1 = evaluateTeam(team1);
+    const e2 = evaluateTeam(team2);
 
-    // Composition error vs ideal 3 cores & 2 supports
-    const compError = Math.abs(eval1.cores - 3)
-      + Math.abs(eval1.supports - 2)
-      + Math.abs(eval2.cores - 3)
-      + Math.abs(eval2.supports - 2);
+    // error de composición vs ideal
+    const compError =
+      Math.abs(e1.cores    - IDEAL_CORES) +
+      Math.abs(e1.supports - IDEAL_SUPPORTS) +
+      Math.abs(e2.cores    - IDEAL_CORES) +
+      Math.abs(e2.supports - IDEAL_SUPPORTS);
 
-    // Tier difference on weighted sums
-    const tierDiff = Math.abs(eval1.sumTiers - eval2.sumTiers);
+    // diferencia de tiers
+    const tierDiff = Math.abs(e1.sumTiers - e2.sumTiers);
 
     if (
       compError < bestCompError ||
@@ -149,29 +178,29 @@ function balanceStartTeams(players) {
         team2: team2.map(p => p.id)
       };
       bestCompError = compError;
-      bestTierDiff = tierDiff;
+      bestTierDiff  = tierDiff;
     }
   }
 
+  // fallback aleatorio
   if (!bestPartition) {
-    // fallback random split
     const shuffled = players.slice().sort(() => Math.random() - 0.5);
     return {
       radiant: shuffled.slice(0, 5).map(p => p.id),
-      dire: shuffled.slice(5, 10).map(p => p.id)
+      dire:    shuffled.slice(5, 10).map(p => p.id),
     };
   }
 
-  // randomly assign which partition is Radiant
+  // asignar aleatoriamente Radiant/Dire
   if (Math.random() < 0.5) {
     return {
       radiant: bestPartition.team1,
-      dire: bestPartition.team2
+      dire:    bestPartition.team2,
     };
   } else {
     return {
       radiant: bestPartition.team2,
-      dire: bestPartition.team1
+      dire:    bestPartition.team1,
     };
   }
 }
