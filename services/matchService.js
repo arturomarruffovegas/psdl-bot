@@ -213,56 +213,63 @@ function balanceStartTeams(players) {
  *  When exactly 10 players have signed, teams are balanced using sophisticated logic,
  *  and the match status is set to "ready".
  */
+/**
+ * Sign a user into the current match's pool.
+ * 
+ * Para "start": al llenar el pool se balancean, se archiva y se borra current.
+ * Para "challenge": sólo actualiza el pool.
+ */
 async function signToPool(userId) {
   const ref = db.collection('matches').doc('current');
   const doc = await ref.get();
   if (!doc.exists) return 'no-match';
   const data = doc.data();
 
-  // Ensure the user is not already in the pool.
   if (data.pool.includes(userId)) return 'already-signed';
-
-  // Add the user
   data.pool.push(userId);
 
+  // === START MATCH ===
   if (data.type === 'start') {
-    // Read pool size from ENV (default to 10)
     const POOL_SIZE = process.env.START_POOL_SIZE
       ? parseInt(process.env.START_POOL_SIZE, 10)
       : 10;
 
-    // 🔍 DEBUG LOG
-    console.log('⚙️  START_POOL_SIZE env var:', process.env.START_POOL_SIZE,
-      '→ POOL_SIZE used in code:', POOL_SIZE);
-
     if (data.pool.length > POOL_SIZE) return 'pool-full';
 
-    // Persist the updated pool
+    // Actualizamos el pool
     await ref.update({ pool: data.pool });
 
-    // Finalize when we hit exactly POOL_SIZE
+    // Cuando alcanza exactamente POOL_SIZE finalizamos
     if (data.pool.length === POOL_SIZE) {
-      // Fetch detailed profiles for all players
-      const players = await Promise.all(
+      // Recuperamos perfiles completos
+      const profiles = await Promise.all(
         data.pool.map(id => playerService.getPlayerProfileById(id))
       );
-      const validPlayers = players.filter(p => p);
+      const validPlayers = profiles.filter(Boolean);
       if (validPlayers.length !== POOL_SIZE) return 'pool-error';
 
-      // Balance teams
+      // Balanceamos equipos
       const teams = balanceStartTeams(validPlayers);
 
-      // Generate lobby details
+      // Generamos lobby y password
       const lobbyName = generateLobbyName();
-      const password = generatePassword();
+      const password  = generatePassword();
 
-      // Update match status
-      await ref.update({
-        teams: teams,
-        status: 'ready',
+      // Preparamos registro final
+      const finalRec = {
+        createdAt: new Date().toISOString(),
+        radiant: { players: teams.radiant },
+        dire:    { players: teams.dire },
+        winner:  null,
         lobbyName,
         password
-      });
+      };
+
+      // Archivamos en finalizedMatches
+      await db.collection('finalizedMatches').add(finalRec);
+
+      // Borramos el current para permitir nuevos juegos
+      await ref.delete();
 
       return {
         status: 'ready',
@@ -271,33 +278,35 @@ async function signToPool(userId) {
       };
     }
 
-    // If not yet full, return the current count
+    // Aún no llegó al tamaño y seguimos mostrando estado
     return {
       status: data.status,
-      count: data.pool.length,
+      count:  data.pool.length,
       poolSize: POOL_SIZE
     };
   }
 
-  // Challenge match branch
+  // === CHALLENGE MATCH ===
   await ref.update({ pool: data.pool });
   return {
     status: data.status,
-    count: data.pool.length
+    count:  data.pool.length
   };
 }
 
 /**
- * Abort the current active match (of either type).
+ * Abort the current active match (challenge o start).
+ * Borra directamente el documento current, liberando para nuevos juegos.
  */
 async function abortMatch() {
   const ref = db.collection('matches').doc('current');
   const doc = await ref.get();
   if (!doc.exists) return false;
+
+  // Simplemente borramos—no archivamos.
   await ref.delete();
   return true;
 }
-
 /**
  * For challenge matches only: allow a captain to pick a player from the pool.
  */
@@ -310,60 +319,53 @@ async function pickPlayer(captainId, userId) {
   if (data.type !== 'challenge') return { error: 'not-applicable' };
 
   const { picks, pool, captain1, captain2 } = data;
-  // 1) must be in pool
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
-  // 2) must be captain’s turn
+
   const radiant  = picks.radiant;
   const dire     = picks.dire;
   const isRadTurn= radiant.length === dire.length;
   const expected = isRadTurn ? captain1 : captain2;
-  if (captainId !== expected)   return { error: 'not-your-turn' };
-  // 3) perform pick
+  if (captainId !== expected) return { error: 'not-your-turn' };
+
+  // perform the pick
   if (isRadTurn) radiant.push(userId);
   else            dire.push(userId);
 
-  // 4) remove from pool
   const newPool = pool.filter(id => id !== userId);
 
-  // how many picks total → 10 by default
-  const MAX_PICKS = process.env.MAX_PICKS 
-                   ? parseInt(process.env.MAX_PICKS,10) 
-                   : 10;
+  const MAX_PICKS = process.env.MAX_PICKS
+    ? parseInt(process.env.MAX_PICKS, 10)
+    : 10;
 
-  // if we’ve hit 5v5…
+  // if we just completed 5v5:
   if (radiant.length + dire.length === MAX_PICKS) {
-    // capture teams
-    const teams = {
-      radiant: [...radiant],
-      dire:    [...dire]
-    };
-    // make lobby/password
+    const teams = { radiant: [...radiant], dire: [...dire] };
     const lobbyName = generateLobbyName();
     const password  = generatePassword();
-    // archive
+
+    // archive into finalizedMatches
     await db.collection('finalizedMatches').add({
       createdAt: new Date().toISOString(),
-      radiant: { captain: captain1, players: teams.radiant },
-      dire:    { captain: captain2, players: teams.dire },
-      winner:  null,
+      radiant:   { captain: captain1, players: teams.radiant },
+      dire:      { captain: captain2, players: teams.dire },
+      winner:    null,
       lobbyName,
       password
     });
-    // tear down current so new matches can start immediately
+
+    // tear down the live draft so new matches can begin immediately
     await ref.delete();
-    // return everything
+
     return {
       team:      isRadTurn ? 'Radiant' : 'Dire',
-      teams,     // final 5‑player lists
-      finalized: { lobbyName, password }
+      finalized: { lobbyName, password, teams }
     };
   }
 
-  // otherwise still drafting → persist picks + pool
+  // otherwise still in draft mode
   await ref.update({ pool: newPool, picks });
   return {
     team:      isRadTurn ? 'Radiant' : 'Dire',
-    teams:     null,
     finalized: null
   };
 }
