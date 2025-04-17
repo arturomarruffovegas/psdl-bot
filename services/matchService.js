@@ -283,67 +283,58 @@ async function pickPlayer(captainId, userId) {
   const { picks, pool, captain1, captain2 } = data;
   // 1) must be in pool
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
-  // 2) must be a captain
-  if (![captain1, captain2].includes(captainId)) return { error: 'not-captain' };
+  // 2) must be captain’s turn
+  const radiant  = picks.radiant;
+  const dire     = picks.dire;
+  const isRadTurn= radiant.length === dire.length;
+  const expected = isRadTurn ? captain1 : captain2;
+  if (captainId !== expected)   return { error: 'not-your-turn' };
+  // 3) perform pick
+  if (isRadTurn) radiant.push(userId);
+  else            dire.push(userId);
 
-  // determine whose turn
-  const radiant = picks.radiant;
-  const dire = picks.dire;
-  const isRadiantTurn = radiant.length === dire.length;
-  const expectedCaptain = isRadiantTurn ? captain1 : captain2;
-  if (captainId !== expectedCaptain) return { error: 'not-your-turn' };
-
-  // perform the pick
-  if (isRadiantTurn) radiant.push(userId);
-  else dire.push(userId);
-
-  // remove from pool
+  // 4) remove from pool
   const newPool = pool.filter(id => id !== userId);
 
-  // how many picks in total to finalize?
-  const MAX_PICKS = process.env.MAX_PICKS
-    ? parseInt(process.env.MAX_PICKS, 10)
-    : 10;
+  // how many picks total → 10 by default
+  const MAX_PICKS = process.env.MAX_PICKS 
+                   ? parseInt(process.env.MAX_PICKS,10) 
+                   : 10;
 
-  // if we’re done drafting (5 vs 5)
+  // if we’ve hit 5v5…
   if (radiant.length + dire.length === MAX_PICKS) {
-    // capture the final teams
-    const teams = { radiant: [...radiant], dire: [...dire] };
-
-    // generate lobby/password
+    // capture teams
+    const teams = {
+      radiant: [...radiant],
+      dire:    [...dire]
+    };
+    // make lobby/password
     const lobbyName = generateLobbyName();
-    const password = generatePassword();
-
-    // archive into finalizedMatches
+    const password  = generatePassword();
+    // archive
     await db.collection('finalizedMatches').add({
       createdAt: new Date().toISOString(),
       radiant: { captain: captain1, players: teams.radiant },
-      dire: { captain: captain2, players: teams.dire },
-      winner: null,
+      dire:    { captain: captain2, players: teams.dire },
+      winner:  null,
       lobbyName,
       password
     });
-
-    // tear down the current so new matches can start
+    // tear down current so new matches can start immediately
     await ref.delete();
-
-    // return everything your command needs
+    // return everything
     return {
-      team: isRadiantTurn ? 'Radiant' : 'Dire',
-      teams,     // <-- full 5‑player lists
+      team:      isRadTurn ? 'Radiant' : 'Dire',
+      teams,     // final 5‑player lists
       finalized: { lobbyName, password }
     };
   }
 
-  // still drafting: persist picks + pool
-  await ref.update({
-    pool: newPool,
-    picks
-  });
-
+  // otherwise still drafting → persist picks + pool
+  await ref.update({ pool: newPool, picks });
   return {
-    team: isRadiantTurn ? 'Radiant' : 'Dire',
-    teams: null,
+    team:      isRadTurn ? 'Radiant' : 'Dire',
+    teams:     null,
     finalized: null
   };
 }

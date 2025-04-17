@@ -1,6 +1,6 @@
+// commands/match/pick.js
 const playerService = require('../../services/playerService');
 const matchService  = require('../../services/matchService');
-const db            = require('../../services/db');
 
 module.exports = {
   name: '!pick',
@@ -8,59 +8,71 @@ module.exports = {
     if (args.length !== 1) {
       return message.channel.send('❌ Usage: `!pick <userId>`');
     }
-    const pickId = args[0].trim();
-    const profile = await playerService.getPlayerProfileByUsername(message.author.username);
-    if (!profile) return message.channel.send('❌ You are not registered.');
+    const pickId  = args[0].trim();
+    const profile = await playerService.getPlayerProfileByUsername(
+      message.author.username.toLowerCase()
+    );
+    if (!profile) {
+      return message.channel.send('❌ You are not registered.');
+    }
 
+    // Attempt the pick
     const result = await matchService.pickPlayer(profile.id, pickId);
+
+    // Error handling
     if (result.error) {
-      if (result.error === 'no-match')      return message.channel.send('❌ No active challenge match.');
-      if (result.error === 'not-captain')   return message.channel.send('❌ Only captains can pick players.');
-      if (result.error === 'not-your-turn') return message.channel.send('⚠️ It is not your turn to pick.');
-      if (result.error === 'not-in-pool')   return message.channel.send('⚠️ That player is not in the pool.');
-      return message.channel.send('❌ An error occurred during picking.');
+      switch (result.error) {
+        case 'no-match':      return message.channel.send('❌ No active challenge match.');
+        case 'not-applicable':return message.channel.send('❌ Not a challenge match.');
+        case 'not-captain':   return message.channel.send('❌ Only captains can pick players.');
+        case 'not-your-turn': return message.channel.send('⚠️ It is not your turn.');
+        case 'not-in-pool':   return message.channel.send('⚠️ That player is not in the pool.');
+        default:              return message.channel.send('❌ An unknown error occurred during picking.');
+      }
     }
 
     const summary = `✅ \`${pickId}\` has been picked for the **${result.team} Team**.`;
 
+    // If we just finished the 5v5…
     if (result.finalized) {
-      const snapshot = await db.collection('matches').doc('current').get();
-      const data     = snapshot.data();
-      const picks    = data.picks;
+      const { teams, finalized } = result;
 
-      // Fetch all players once for role/tier lookups
+      // Load all players once for role/tier lookups
       const allPlayers = await playerService.fetchAllPlayers();
 
-      // Format team members with role and tier, crown for captains
-      const formatTeam = (players, label, captainId) => {
+      // Format a single team, injecting role/tier
+      const formatTeam = (ids, label) => {
         return `**${label} Team**\n` +
-          [captainId, ...players].map(id => {
-            const p     = allPlayers.find(u => u.id === id);
-            const crown = id === captainId ? ' 👑' : '';
+          ids.map(id => {
+            const p = allPlayers.find(u => u.id === id);
             return p
-              ? `• \`${p.id}\`${crown} — (${p.role.toUpperCase()} - T${p.tier})`
-              : `• \`${id}\`${crown}`;
+              ? `• \`${p.id}\` — (${p.role.toUpperCase()} - T${p.tier})`
+              : `• \`${id}\``;
           }).join('\n');
       };
 
-      // Wrap lobby and password in Discord spoiler tags
-      const lobbySpoiler    = `||\`${result.finalized.lobbyName}\`||`;
-      const passwordSpoiler = `||\`${result.finalized.password}\`||`;
+      const lobbySpoiler    = `||\`${finalized.lobbyName}\`||`;
+      const passwordSpoiler = `||\`${finalized.password}\`||`;
 
       return message.channel.send(
         `${summary}\n\n🎮 **Match Ready!**\n` +
-        `🟢 ${formatTeam(picks.radiant, 'Radiant', data.captain1)}\n\n` +
-        `🔴 ${formatTeam(picks.dire,    'Dire',    data.captain2)}\n\n` +
+        `🟢 ${formatTeam(teams.radiant, 'Radiant')}\n\n` +
+        `🔴 ${formatTeam(teams.dire, 'Dire')}\n\n` +
         `🧩 Lobby: ${lobbySpoiler}\n` +
-        `🔐 Password: ${passwordSpoiler}\n` +
+        `🔐 Password: ${passwordSpoiler}\n\n` +
         `Captains must now report the result using \`!result radiant\` or \`!result dire\`.`
       );
     }
 
-    // Otherwise, indicate whose turn is next.
-    const snapshot    = await db.collection('matches').doc('current').get();
-    const data        = snapshot.data();
-    const nextCaptain = result.team === 'Radiant' ? data.captain2 : data.captain1;
-    return message.channel.send(`${summary}\n🎯 **${nextCaptain}**, it's your turn to pick.`);
+    // Otherwise still drafting → tell next captain
+    // (we can re-fetch the very small current doc to find the next captain)
+    const cur = await matchService.getCurrentMatch();
+    const nextCap = result.team === 'Radiant'
+      ? cur.captain2
+      : cur.captain1;
+
+    return message.channel.send(
+      `${summary}\n🎯 **${nextCap}**, it's your turn to pick.`
+    );
   }
 };
