@@ -1,12 +1,11 @@
 // commands/match/result.js
 const playerService = require('../../services/playerService');
 const matchService  = require('../../services/matchService');
-const db            = require('../../services/db');
 
 module.exports = {
   name: '!result',
   async execute(message, args) {
-    // 1) Validar args
+    // 1) Validate arguments
     if (args.length !== 1) {
       return message.channel.send('❌ Usage: `!result <radiant|dire>`');
     }
@@ -15,52 +14,28 @@ module.exports = {
       return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
     }
 
-    // 2) Obtener perfil del usuario
+    // 2) Look up the caller’s profile
     const username = message.author.username.toLowerCase();
     const profile  = await playerService.getPlayerProfileByUsername(username);
     if (!profile) {
       return message.channel.send('❌ You are not registered.');
     }
 
-    // 3) Buscar la partida en curso en ongoingMatches
-    const snaps = await db.collection('ongoingMatches').get();
-    let matchDoc = null;
-    snaps.forEach(doc => {
-      if (matchDoc) return; // ya lo encontramos
-      const d = doc.data();
-      let participants = [];
-      if (d.type === 'challenge') {
-        participants = [
-          d.captain1,
-          d.captain2,
-          ...d.teams.radiant.players,
-          ...d.teams.dire.players
-        ];
-      } else { // start
-        participants = [
-          ...d.teams.radiant.players,
-          ...d.teams.dire.players
-        ];
-      }
-      if (participants.includes(profile.id)) {
-        matchDoc = doc;
-      }
-    });
-    if (!matchDoc) {
-      return message.channel.send('❌ No active match to report.');
+    // 3) Find the ongoing match for this user
+    const ongoing = await matchService.getOngoingMatchForUser(profile.id);
+    if (!ongoing) {
+      return message.channel.send('❌ You are not currently in an ongoing match.');
     }
-    const matchId = matchDoc.id;
-    const match   = matchDoc.data();
 
-    // 4) Delegate to matchService.submitResult, pasándole el matchId
-    //    Nota: para challenge, captainId debe ser profile.id; para start, también.
+    // 4) Submit the result
     const res = await matchService.submitResult(
-      profile.id,
-      profile.id,
-      resultTeam,
-      matchId
+      profile.id,    // userId
+      profile.id,    // captainId (for challenge)
+      resultTeam,    // “radiant” or “dire”
+      ongoing.id     // the doc ID in ongoingMatches
     );
 
+    // 5) Handle any errors
     if (res.error) {
       switch (res.error) {
         case 'invalid-team':
@@ -78,9 +53,9 @@ module.exports = {
       }
     }
 
-    // 5) Formatear respuesta según tipo y estado
-    if (match.type === 'challenge') {
-      // el método retorna { matchId, winner }
+    // 6) Success!
+    if (ongoing.type === 'challenge') {
+      // single submission by captains
       return message.channel.send(
         `🏆 Match result recorded: **${res.winner.toUpperCase()}** wins!\n` +
         `Challenge closed.\n` +
@@ -88,18 +63,17 @@ module.exports = {
         `Review with \`!info <matchId>\``
       );
     } else {
-      // start match: puede ser pending o finalized
+      // start‑match voting flow
       if (res.status === 'pending') {
-        // res.votes = { radiant: [...], dire: [...] }
         const r = res.votes.radiant;
         const d = res.votes.dire;
-        const line = 
+        return message.channel.send(
           `✅ Your vote for **${resultTeam.toUpperCase()}** has been recorded!\n\n` +
-          `🟢 Radiant (${r.length} vote${r.length!==1?'s':''}): ` +
-            (r.length ? r.map(id=>`\`${id}\``).join(', ') : '—') + '\n' +
-          `🔴 Dire    (${d.length} vote${d.length!==1?'s':''}): ` +
-            (d.length ? d.map(id=>`\`${id}\``).join(', ') : '—');
-        return message.channel.send(line);
+          `🟢 Radiant (${r.length} vote${r.length !== 1 ? 's' : ''}): ` +
+            (r.length ? r.map(id => `\`${id}\``).join(', ') : '—') + '\n' +
+          `🔴 Dire    (${d.length} vote${d.length !== 1 ? 's' : ''}): ` +
+            (d.length ? d.map(id => `\`${id}\``).join(', ') : '—')
+        );
       }
       // finalized
       return message.channel.send(
