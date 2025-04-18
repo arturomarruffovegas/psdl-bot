@@ -1,16 +1,17 @@
-const playerService    = require('../../services/playerService');
-const matchService     = require('../../services/matchService');
-const teamPoolService  = require('../../services/teamPoolService');
+// commands/match/sign.js
+const playerService   = require('../../services/playerService');
+const matchService    = require('../../services/matchService');
+const teamPoolService = require('../../services/teamPoolService');
 
-// Read desired start‑match pool size from env, default to 10
+// Read desired start‑match pool size from ENV, default to 10
 const POOL_SIZE = process.env.START_POOL_SIZE
   ? parseInt(process.env.START_POOL_SIZE, 10)
   : 10;
 
 module.exports = {
   name: '!sign',
-  async execute(message, args) {
-    // 1) Lookup user's internal ID
+  async execute(message) {
+    // 1) who is calling?
     const discordName = message.author.username.toLowerCase();
     const profile     = await playerService.getPlayerProfileByUsername(discordName);
     if (!profile) {
@@ -18,11 +19,9 @@ module.exports = {
     }
     const userId = profile.id;
 
-    // ───────────────────────────────────────────────────────
-    // 2) Infinite “create teams” pool takes priority if open
+    // 2) infinite team‑creation pool has priority
     const infPool = await teamPoolService.getPool();
     if (infPool) {
-      // try to sign into the infinite pool
       const res = await teamPoolService.signToPool(userId);
       if (typeof res === 'string') {
         if (res === 'no-pool')       return message.channel.send('❌ No active team‑creation pool.');
@@ -31,50 +30,51 @@ module.exports = {
         return message.channel.send(`✅ Signed into the team‑creation pool (${res.count} signed).`);
       }
     }
-    // ───────────────────────────────────────────────────────
 
-    // 3) Fetch the current unified match (challenge or start)
+    // 3) now the unified match (challenge or start)
     const activeMatch = await matchService.getCurrentMatch();
     if (!activeMatch) {
       return message.channel.send('❌ No active match to sign up for.');
     }
 
-    // 4) Challenge‑specific guards
+    // 4) challenge‑specific guards
     if (activeMatch.type === 'challenge') {
-      // 4a) Must be accepted first
+      // must have been accepted
       if (activeMatch.status !== 'waiting') {
         return message.channel.send(
           '⚠️ Challenge not yet accepted. Please wait for the challenged player to `!accept`.'
         );
       }
-      // 4b) Captains may not sign
-      if (userId === activeMatch.captain1 || userId === activeMatch.captain2) {
+      // captains can’t sign themselves
+      if ([activeMatch.captain1, activeMatch.captain2].includes(userId)) {
         return message.channel.send('❌ Captains cannot sign into the challenge pool.');
       }
-      // 4c) Once picks start, no more sign‑ups
-      const { picks } = activeMatch;
-      if (picks.radiant.length + picks.dire.length > 0) {
+      // once picks began, no more sign‑ups
+      const picked = activeMatch.picks.radiant.length + activeMatch.picks.dire.length;
+      if (picked > 0) {
         return message.channel.send('⚠️ Picking has already begun—you can no longer sign up.');
       }
     }
 
-    // 5) Prevent duplicate sign‑ups
+    // 5) duplicate sign‑up guard
     if (activeMatch.pool.includes(userId)) {
       return message.channel.send('⚠️ You are already signed up.');
     }
 
-    // 6) Attempt to sign into the (challenge or start) pool
+    // 6) try to sign into the pool
     const result = await matchService.signToPool(userId);
 
-    // 7) Handle string error codes
+    // 7) handle the string error codes
     if (typeof result === 'string') {
       if (result === 'no-match')       return message.channel.send('❌ No active match.');
       if (result === 'already-signed') return message.channel.send('⚠️ You are already signed up.');
-      if (result === 'pool-full')      return message.channel.send('⚠️ The start match pool is already full.');
-      if (result === 'pool-error')     return message.channel.send('❌ An error occurred finalizing the pool.');
+      if (result === 'match-ready')    return message.channel.send('⚠️ The match is already ready to start.');
+      if (result === 'not-open')       return message.channel.send('⚠️ Challenge is not open for sign‑ups.');
+      if (result === 'drafting')       return message.channel.send('⚠️ Draft has already begun.');
+      if (result === 'pool-error')     return message.channel.send('❌ Error finalizing the pool.');
     }
 
-    // 8) If pool still filling, show correct count formatting
+    // 8) still filling the pool?
     if (result.status !== 'ready') {
       if (activeMatch.type === 'start') {
         return message.channel.send(
@@ -87,12 +87,9 @@ module.exports = {
       }
     }
 
-    // 9) === MATCH FINALIZED ===
+    // 9) === the pool just filled and match is “ready” ===
     const { teams, finalized } = result;
-
-    // fetch all players for lookup
     const allPlayers = await playerService.fetchAllPlayers();
-    // format each team member with role and tier
     const formatTeam = ids => ids
       .map(id => {
         const p = allPlayers.find(u => u.id === id);
@@ -102,7 +99,6 @@ module.exports = {
       })
       .join('\n');
 
-    // Wrap lobby info in spoilers
     const lobbySpoiler    = `||\`${finalized.lobbyName}\`||`;
     const passwordSpoiler = `||\`${finalized.password}\`||`;
 
