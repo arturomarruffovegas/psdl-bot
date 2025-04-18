@@ -18,29 +18,40 @@ module.exports = {
 
     // Attempt the pick
     const result = await matchService.pickPlayer(profile.id, pickId);
- 
+
     // Error handling
     if (result.error) {
       switch (result.error) {
-        case 'no-match':      return message.channel.send('❌ No active challenge match.');
-        case 'not-applicable':return message.channel.send('❌ Not a challenge match.');
-        case 'not-captain':   return message.channel.send('❌ Only captains can pick players.');
-        case 'not-your-turn': return message.channel.send('⚠️ It is not your turn.');
-        case 'not-in-pool':   return message.channel.send('⚠️ That player is not in the pool.');
-        default:              return message.channel.send('❌ An unknown error occurred during picking.');
+        case 'no-match':
+          return message.channel.send('❌ No active challenge match.');
+        case 'not-applicable':
+          return message.channel.send('❌ Not a challenge match.');
+        case 'not-enough-players':
+          return message.channel.send(
+            '❌ Not enough players signed up to start drafting. Wait until at least 8 have `!sign`ed.'
+          );
+        case 'not-captain':
+          return message.channel.send('❌ Only captains can pick players.');
+        case 'not-your-turn':
+          return message.channel.send('⚠️ It is not your turn.');
+        case 'not-in-pool':
+          return message.channel.send('⚠️ That player is not in the pool.');
+        default:
+          return message.channel.send('❌ An unknown error occurred during picking.');
       }
     }
 
+    // Summary of this pick
     const summary = `✅ \`${pickId}\` has been picked for the **${result.team} Team**.`;
 
-    // If we just finished the 5v5…
+    // === Draft complete ===
     if (result.finalized) {
-      const { teams, finalized } = result;
+      // Destructure out the finalized payload
+      const { finalized } = result;
+      const { teams, lobbyName, password } = finalized;
 
-      // Load all players once for role/tier lookups
+      // Fetch all profiles once for formatting
       const allPlayers = await playerService.fetchAllPlayers();
-
-      // Format a single team, injecting role/tier
       const formatTeam = (ids, label) => {
         return `**${label} Team**\n` +
           ids.map(id => {
@@ -51,25 +62,22 @@ module.exports = {
           }).join('\n');
       };
 
-      const lobbySpoiler    = `||\`${finalized.lobbyName}\`||`;
-      const passwordSpoiler = `||\`${finalized.password}\`||`;
-
+      // Send the full “Match Ready!” summary
       return message.channel.send(
         `${summary}\n\n🎮 **Match Ready!**\n` +
         `🟢 ${formatTeam(teams.radiant, 'Radiant')}\n\n` +
         `🔴 ${formatTeam(teams.dire, 'Dire')}\n\n` +
-        `🧩 Lobby: ${lobbySpoiler}\n` +
-        `🔐 Password: ${passwordSpoiler}\n\n` +
+        `🧩 Lobby: ||\`${lobbyName}\`||\n` +
+        `🔐 Password: ||\`${password}\`||\n\n` +
         `Captains must now report the result using \`!result radiant\` or \`!result dire\`.`
       );
     }
 
-    // Otherwise still drafting → tell next captain
-    // (we can re-fetch the very small current doc to find the next captain)
-    const cur = await matchService.getCurrentMatch();
+    // === Still drafting: prompt next captain ===
+    const current = await matchService.getCurrentMatch();
     const nextCap = result.team === 'Radiant'
-      ? cur.captain2
-      : cur.captain1;
+      ? current.captain2
+      : current.captain1;
 
     return message.channel.send(
       `${summary}\n🎯 **${nextCap}**, it's your turn to pick.`

@@ -7,12 +7,17 @@ const teamPoolService = require('../services/teamPoolService');
 module.exports = {
   name: '!teams',
   async execute(message) {
-    // fetch all players once for lookups
-    const all = await playerService.fetchAllPlayers();
+    // 0) Who is calling?
+    const username = message.author.username.toLowerCase();
+    const profile  = await playerService.getPlayerProfileByUsername(username);
+    if (!profile) {
+      return message.channel.send('❌ You are not registered.');
+    }
 
     // helper: format each id with role/tier (+ crown if captain)
+    const all = await playerService.fetchAllPlayers();
     const makeField = (ids, label, captainId = null) => ({
-      name: label,
+      name:  label,
       value: ids.map(id => {
         const p     = all.find(u => u.id === id);
         const crown = id === captainId ? ' 👑' : '';
@@ -23,10 +28,47 @@ module.exports = {
       inline: true
     });
 
-    // 1) Challenge or start match?
+    // 1) Check for an ongoing match for this user
+    const ongoing = await matchService.getOngoingMatchForUser(profile.id);
+    if (ongoing) {
+      const embed = new EmbedBuilder()
+        .setTimestamp();
+
+      if (ongoing.type === 'challenge') {
+        // challenge stores teams with { captain, players }
+        const { captain1, captain2, teams } = ongoing;
+        embed
+          .setTitle('🎮 Ongoing Challenge Teams')
+          .addFields(
+            makeField(
+              [teams.radiant.captain, ...teams.radiant.players],
+              '🟢 Radiant',
+              teams.radiant.captain
+            ),
+            makeField(
+              [teams.dire.captain, ...teams.dire.players],
+              '🔴 Dire',
+              teams.dire.captain
+            )
+          );
+      } else {
+        // start‑match stores teams as simple arrays
+        const { teams } = ongoing;
+        embed
+          .setTitle('🎮 Ongoing Start Match Teams')
+          .addFields(
+            makeField(teams.radiant, '🟢 Radiant'),
+            makeField(teams.dire,    '🔴 Dire')
+          );
+      }
+
+      return message.channel.send({ embeds: [embed] });
+    }
+
+    // 2) No ongoing match → check the current pregame (challenge or start)
     const match = await matchService.getCurrentMatch();
     if (match) {
-      // --- Challenge
+      // --- Pregame Challenge ---
       if (match.type === 'challenge') {
         const { captain1, captain2, picks, status } = match;
         if (status === 'pending') {
@@ -47,13 +89,12 @@ module.exports = {
         return message.channel.send({ embeds: [embed] });
       }
 
-      // --- Start
+      // --- Pregame Start Match ---
       if (match.type === 'start') {
         if (match.status !== 'ready') {
           return message.channel.send('⚠️ Start match not ready yet.');
         }
         const { radiant, dire } = match.teams;
-        // no captainId here, so omit third arg
         const embed = new EmbedBuilder()
           .setTitle('📝 Start Match Teams')
           .setColor(0x00CC66)
@@ -69,7 +110,7 @@ module.exports = {
       return message.channel.send('⚠️ Active match has an unrecognized type.');
     }
 
-    // 2) Fallback to infinite‑pool split
+    // 3) Fallback to infinite‑pool split
     const split = await teamPoolService.getSplitResult?.();
     if (split) {
       const { radiant, dire } = split;
@@ -85,7 +126,7 @@ module.exports = {
       return message.channel.send({ embeds: [embed] });
     }
 
-    // 3) Nothing to show
+    // 4) Nothing to show
     return message.channel.send('⚠️ No teams to display right now.');
   }
 };

@@ -294,15 +294,16 @@ async function pickPlayer(captainId, userId) {
   const data = doc.data();
   if (data.type !== 'challenge') return { error: 'not-applicable' };
 
-  // must have >=8 signed before drafting
-  if ((data.pool?.length ?? 0) < 8) {
+  // only enforce >=8 sign‑ups before the very first pick
+  const picksCount = data.picks.radiant.length + data.picks.dire.length;
+  if (picksCount === 0 && (data.pool?.length ?? 0) < 8) {
     return { error: 'not-enough-players' };
   }
 
   const { picks, pool, captain1, captain2 } = data;
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
 
-  // on first pick, choose random side
+  // on first pick, choose random side if not already set
   if (data.firstPickTeam === null && picks.radiant.length === 0 && picks.dire.length === 0) {
     const side = Math.random() < 0.5 ? 'radiant' : 'dire';
     await ref.update({ firstPickTeam: side });
@@ -333,9 +334,9 @@ async function pickPlayer(captainId, userId) {
     : 8;
 
   if (picks.radiant.length + picks.dire.length === MAX_PICKS) {
-    const teams = { radiant: picks.radiant.slice(), dire: picks.dire.slice() };
+    const teams     = { radiant: picks.radiant.slice(), dire: picks.dire.slice() };
     const lobbyName = generateLobbyName();
-    const password = generatePassword();
+    const password  = generatePassword();
 
     // archive to ongoingMatches
     const onRec = {
@@ -345,9 +346,9 @@ async function pickPlayer(captainId, userId) {
       captain2,
       teams: {
         radiant: { captain: captain1, players: teams.radiant },
-        dire: { captain: captain2, players: teams.dire }
+        dire:    { captain: captain2, players: teams.dire }
       },
-      winner: null,
+      winner:    null,
       lobbyName,
       password
     };
@@ -355,17 +356,17 @@ async function pickPlayer(captainId, userId) {
     await ref.delete();
 
     return {
-      team: isRadTurn ? 'Radiant' : 'Dire',
+      team:      isRadTurn ? 'Radiant' : 'Dire',
       finalized: { lobbyName, password, teams },
-      status: 'ongoing',
-      matchId: onRef.id
+      status:    'ongoing',
+      matchId:   onRef.id
     };
   }
 
   // still drafting
   await ref.update({ pool: newPool, picks });
   return {
-    team: isRadTurn ? 'Radiant' : 'Dire',
+    team:      isRadTurn ? 'Radiant' : 'Dire',
     finalized: null
   };
 }
@@ -376,32 +377,62 @@ async function pickPlayer(captainId, userId) {
  * For start: voting by participants.
  */
 async function submitResult(userId, captainId, resultTeam, matchId) {
-  const ref  = db.collection('ongoingMatches').doc(matchId);
-  const snap = await ref.get();
-  if (!snap.exists) return { error: 'no-match' };
-  const data = snap.data();
+  const ref = db.collection('ongoingMatches').doc(matchId);
 
-  // validate team
-  if (!['radiant','dire'].includes(resultTeam)) {
+  // 1) Validate the resultTeam parameter
+  if (!['radiant', 'dire'].includes(resultTeam)) {
     return { error: 'invalid-team' };
   }
 
-  // helper: normalize to plain arrays
-  const radArr = Array.isArray(data.teams.radiant.players)
-    ? data.teams.radiant.players
-    : data.teams.radiant;
-  const dirArr = Array.isArray(data.teams.dire.players)
-    ? data.teams.dire.players
-    : data.teams.dire;
+  // 2) Load the existing ongoing match
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return { error: 'no-match' };
+  }
+  const data = snap.data();
 
-  // --- Challenge flow ---
+  // --- Challenge flow: only one submission allowed ---
   if (data.type === 'challenge') {
-    // only captains
-    if (![data.captain1, data.captain2].includes(captainId)) {
-      return { error: 'not-captain' };
+    // Run a transaction that ensures only the first valid submitter can delete the doc
+    try {
+      await db.runTransaction(async t => {
+        const txSnap = await t.get(ref);
+        if (!txSnap.exists) {
+          throw new Error('no-match');
+        }
+        const txData = txSnap.data();
+
+        // Only captains may record the result
+        if (![txData.captain1, txData.captain2].includes(captainId)) {
+          throw new Error('not-captain');
+        }
+
+        // Delete the doc so subsequent calls see “no-match”
+        t.delete(ref);
+      });
+    } catch (err) {
+      if (err.message === 'no-match') {
+        return { error: 'no-match' };
+      }
+      if (err.message === 'not-captain') {
+        return { error: 'not-captain' };
+      }
+      // Any other error (e.g. doc already deleted) → already submitted
+      return { error: 'already-submitted' };
     }
 
-    // build final record
+    // At this point the transaction succeeded and the doc is gone.
+    // Proceed to archive and award points:
+
+    // Normalize player arrays
+    const radArr = Array.isArray(data.teams.radiant.players)
+      ? data.teams.radiant.players
+      : data.teams.radiant;
+    const dirArr = Array.isArray(data.teams.dire.players)
+      ? data.teams.dire.players
+      : data.teams.dire;
+
+    // Build the finalized record
     const finalRec = {
       createdAt: new Date().toISOString(),
       radiant:   { captain: data.captain1, players: radArr },
@@ -412,7 +443,7 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     };
     const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
-    // adjust points
+    // Batch-update points
     const batch = db.batch();
     const delta = 25;
     const winnerTeam = resultTeam === 'radiant'
@@ -440,49 +471,54 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     }
     await batch.commit();
 
-    // remove from ongoing
-    await ref.delete();
-
     return { matchId: finalDocRef.id, winner: resultTeam };
   }
 
-  // --- Start flow ---
+  // --- Start flow: voting by participants ---
   if (data.type === 'start') {
-    // init votes
+    // init votes if missing
     if (!data.votes) data.votes = { radiant: [], dire: [] };
 
-    // double‑voting?
+    // prevent double‑voting
     if (data.votes.radiant.includes(userId) || data.votes.dire.includes(userId)) {
       return { error: 'already-voted' };
     }
 
-    // only participants
-    const participants = [...radArr, ...dirArr];
+    // only participants may vote
+    const participants = [
+      ...(Array.isArray(data.teams.radiant.players) ? data.teams.radiant.players : data.teams.radiant),
+      ...(Array.isArray(data.teams.dire.players)    ? data.teams.dire.players    : data.teams.dire)
+    ];
     if (!participants.includes(userId)) {
       return { error: 'not-participant' };
     }
 
-    // record vote
+    // record the vote
     data.votes[resultTeam].push(userId);
     await ref.update({ votes: data.votes });
 
-    // finalize at 6 votes
+    // finalize once a team hits 6 votes
     if (data.votes[resultTeam].length >= 6) {
       const finalRec = {
         createdAt: new Date().toISOString(),
-        radiant:   { players: radArr },
-        dire:      { players: dirArr },
+        radiant:   { players: participants.slice(0, participants.length / 2) },
+        dire:      { players: participants.slice(participants.length / 2) },
         winner:    resultTeam,
         lobbyName: data.lobbyName,
         password:  data.password
       };
       const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
-      // adjust points
+      // adjust points just like above…
       const batch = db.batch();
       const delta = 25;
-      const winners = resultTeam === 'radiant' ? radArr : dirArr;
-      const losers  = resultTeam === 'radiant' ? dirArr : radArr;
+      const winners = resultTeam === 'radiant'
+        ? participants.slice(0, participants.length / 2)
+        : participants.slice(participants.length / 2);
+      const losers = resultTeam === 'radiant'
+        ? participants.slice(participants.length / 2)
+        : participants.slice(0, participants.length / 2);
+
       for (const pid of winners) {
         const uref = db.collection('players').doc(pid);
         const usnap = await uref.get();
@@ -501,7 +537,7 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
       }
       await batch.commit();
 
-      // remove from ongoing
+      // remove from ongoingMatches
       await ref.delete();
 
       return {
