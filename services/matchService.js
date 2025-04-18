@@ -291,7 +291,7 @@ async function signToPool(userId) {
 
       // Generar lobby y password
       const lobbyName = generateLobbyName();
-      const password  = generatePassword();
+      const password = generatePassword();
 
       // Construir el registro de la partida en curso
       const ongoingRec = {
@@ -311,8 +311,8 @@ async function signToPool(userId) {
 
       // 5) Devolver payload
       return {
-        status:    'ongoing',
-        matchId:   ongoingRef.id,
+        status: 'ongoing',
+        matchId: ongoingRef.id,
         teams,
         finalized: { lobbyName, password }
       };
@@ -320,8 +320,8 @@ async function signToPool(userId) {
 
     // Si aún no llena, devolvemos el conteo dinámico
     return {
-      status:   data.status,
-      count:    data.pool.length,
+      status: data.status,
+      count: data.pool.length,
       poolSize: POOL_SIZE
     };
   }
@@ -331,7 +331,7 @@ async function signToPool(userId) {
   await ref.update({ pool: data.pool });
   return {
     status: data.status,
-    count:  data.pool.length
+    count: data.pool.length
   };
 }
 
@@ -352,6 +352,9 @@ async function abortMatch() {
 /**
  * For challenge matches only: allow a captain to pick a player from the pool.
  */
+/**
+ * For challenge matches only: allow a captain to pick a player from the pool.
+ */
 async function pickPlayer(captainId, userId) {
   const ref = db.collection('matches').doc('current');
   const doc = await ref.get();
@@ -360,37 +363,47 @@ async function pickPlayer(captainId, userId) {
   const data = doc.data();
   if (data.type !== 'challenge') return { error: 'not-applicable' };
 
-  const { picks, pool, captain1, captain2 } = data;
+  const { picks, pool, captain1, captain2, firstPickTeam } = data;
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
 
-  const radiant  = picks.radiant;
-  const dire     = picks.dire;
-  const isRadTurn= radiant.length === dire.length;
-  const expected = isRadTurn ? captain1 : captain2;
-  if (captainId !== expected) return { error: 'not-your-turn' };
+  const radiant = picks.radiant;
+  const dire    = picks.dire;
 
-  // 1) aplicar el pick
+  // Determine whose turn it is:
+  // - If both sides have picked equally, use firstPickTeam.
+  // - Otherwise, the side with fewer picks goes next.
+  let isRadTurn;
+  if (radiant.length === dire.length) {
+    isRadTurn = firstPickTeam === 'radiant';
+  } else {
+    isRadTurn = radiant.length < dire.length;
+  }
+
+  const expectedCaptain = isRadTurn ? captain1 : captain2;
+  if (captainId !== expectedCaptain) return { error: 'not-your-turn' };
+
+  // 1) Apply the pick
   if (isRadTurn) radiant.push(userId);
-  else            dire.push(userId);
+  else           dire.push(userId);
 
-  // 2) remover del pool
+  // 2) Remove from the pool
   const newPool = pool.filter(id => id !== userId);
 
-  // 3) revisar si completamos 5v5
+  // 3) Check if we've completed an 8‑pick draft (2 captains + 8 players)
   const MAX_PICKS = process.env.MAX_PICKS
     ? parseInt(process.env.MAX_PICKS, 10)
-    : 10;
+    : 8;  // only 8 picks in pool
 
   if (radiant.length + dire.length === MAX_PICKS) {
-    // 4) preparar los equipos definitivos
+    // 4) Final teams are ready
     const teams     = { radiant: [...radiant], dire: [...dire] };
     const lobbyName = generateLobbyName();
     const password  = generatePassword();
 
-    // 5) crear registro en ongoingMatches
+    // 5) Archive into ongoingMatches so 'current' is freed
     const ongoingRec = {
       createdAt: new Date().toISOString(),
-      type: 'challenge',
+      type:      'challenge',
       captain1,
       captain2,
       teams: {
@@ -403,10 +416,10 @@ async function pickPlayer(captainId, userId) {
     };
     const ongoingRef = await db.collection('ongoingMatches').add(ongoingRec);
 
-    // 6) borrar el draft de current para liberar nuevos pre-games
+    // 6) Delete the draft so new pre‑games can begin immediately
     await ref.delete();
 
-    // 7) devolver payload con detalles de “Match Ready”
+    // 7) Return the payload your command handler expects
     return {
       team:      isRadTurn ? 'Radiant' : 'Dire',
       finalized: { lobbyName, password, teams },
@@ -415,7 +428,7 @@ async function pickPlayer(captainId, userId) {
     };
   }
 
-  // 8) si seguimos en drafting, persistir cambios y devolver turno
+  // 8) Still drafting → persist pool + picks
   await ref.update({ pool: newPool, picks });
   return {
     team:      isRadTurn ? 'Radiant' : 'Dire',
@@ -451,13 +464,13 @@ async function pickPlayer(captainId, userId) {
  */
 async function submitResult(userId, captainId, resultTeam, matchId) {
   // 1) Leer de ongoingMatches en lugar de matches/current
-  const ref  = db.collection('ongoingMatches').doc(matchId);
+  const ref = db.collection('ongoingMatches').doc(matchId);
   const snap = await ref.get();
   if (!snap.exists) return { error: 'no-match' };
   const data = snap.data();
 
   // 2) Validar equipo
-  if (!['radiant','dire'].includes(resultTeam)) {
+  if (!['radiant', 'dire'].includes(resultTeam)) {
     return { error: 'invalid-team' };
   }
 
@@ -470,11 +483,11 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     // Preparar registro final
     const finalRec = {
       createdAt: new Date().toISOString(),
-      radiant:   { captain: data.captain1, players: data.teams.radiant.players },
-      dire:      { captain: data.captain2, players: data.teams.dire.players },
-      winner:    resultTeam,
+      radiant: { captain: data.captain1, players: data.teams.radiant.players },
+      dire: { captain: data.captain2, players: data.teams.dire.players },
+      winner: resultTeam,
       lobbyName: data.lobbyName,
-      password:  data.password
+      password: data.password
     };
     // Archivar en finalizedMatches
     const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
@@ -512,7 +525,7 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
 
     return {
       matchId: finalDocRef.id,
-      winner:  resultTeam
+      winner: resultTeam
     };
   }
 
@@ -537,11 +550,11 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     if (data.votes[resultTeam].length >= 6) {
       const finalRec = {
         createdAt: new Date().toISOString(),
-        radiant:   { players: data.teams.radiant.players },
-        dire:      { players: data.teams.dire.players },
-        winner:    resultTeam,
+        radiant: { players: data.teams.radiant.players },
+        dire: { players: data.teams.dire.players },
+        winner: resultTeam,
         lobbyName: data.lobbyName,
-        password:  data.password
+        password: data.password
       };
       const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
@@ -549,7 +562,7 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
       const batch = db.batch();
       const delta = 25;
       const winnerIds = data.teams[resultTeam].players;
-      const loserIds  = data.teams[resultTeam === 'radiant' ? 'dire' : 'radiant'].players;
+      const loserIds = data.teams[resultTeam === 'radiant' ? 'dire' : 'radiant'].players;
       for (const pid of winnerIds) {
         const uref = db.collection('players').doc(pid);
         const usnap = await uref.get();
@@ -572,16 +585,16 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
       await ref.delete();
 
       return {
-        status:  'finalized',
+        status: 'finalized',
         matchId: finalDocRef.id,
-        winner:  resultTeam
+        winner: resultTeam
       };
     }
 
     // Aún en votación
     return {
       status: 'pending',
-      votes:  data.votes
+      votes: data.votes
     };
   }
 
