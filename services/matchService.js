@@ -127,7 +127,7 @@ function balanceStartTeams(players) {
     }
 
     // 2) determinar cuántos deben cubrir rol ajeno
-    let needCore    = Math.max(0, IDEAL_CORES - cores);    // soportes que jugarán de core
+    let needCore = Math.max(0, IDEAL_CORES - cores);    // soportes que jugarán de core
     let needSupport = Math.max(0, IDEAL_SUPPORTS - supports); // cores que jugarán de support
 
     // 3) calcular suma de tiers con penalización
@@ -161,9 +161,9 @@ function balanceStartTeams(players) {
 
     // error de composición vs ideal
     const compError =
-      Math.abs(e1.cores    - IDEAL_CORES) +
+      Math.abs(e1.cores - IDEAL_CORES) +
       Math.abs(e1.supports - IDEAL_SUPPORTS) +
-      Math.abs(e2.cores    - IDEAL_CORES) +
+      Math.abs(e2.cores - IDEAL_CORES) +
       Math.abs(e2.supports - IDEAL_SUPPORTS);
 
     // diferencia de tiers
@@ -178,7 +178,7 @@ function balanceStartTeams(players) {
         team2: team2.map(p => p.id)
       };
       bestCompError = compError;
-      bestTierDiff  = tierDiff;
+      bestTierDiff = tierDiff;
     }
   }
 
@@ -187,7 +187,7 @@ function balanceStartTeams(players) {
     const shuffled = players.slice().sort(() => Math.random() - 0.5);
     return {
       radiant: shuffled.slice(0, 5).map(p => p.id),
-      dire:    shuffled.slice(5, 10).map(p => p.id),
+      dire: shuffled.slice(5, 10).map(p => p.id),
     };
   }
 
@@ -195,12 +195,12 @@ function balanceStartTeams(players) {
   if (Math.random() < 0.5) {
     return {
       radiant: bestPartition.team1,
-      dire:    bestPartition.team2,
+      dire: bestPartition.team2,
     };
   } else {
     return {
       radiant: bestPartition.team2,
-      dire:    bestPartition.team1,
+      dire: bestPartition.team1,
     };
   }
 }
@@ -253,14 +253,14 @@ async function signToPool(userId) {
 
       // Generamos lobby y password
       const lobbyName = generateLobbyName();
-      const password  = generatePassword();
+      const password = generatePassword();
 
       // Preparamos registro final
       const finalRec = {
         createdAt: new Date().toISOString(),
         radiant: { players: teams.radiant },
-        dire:    { players: teams.dire },
-        winner:  null,
+        dire: { players: teams.dire },
+        winner: null,
         lobbyName,
         password
       };
@@ -281,7 +281,7 @@ async function signToPool(userId) {
     // Aún no llegó al tamaño y seguimos mostrando estado
     return {
       status: data.status,
-      count:  data.pool.length,
+      count: data.pool.length,
       poolSize: POOL_SIZE
     };
   }
@@ -290,7 +290,7 @@ async function signToPool(userId) {
   await ref.update({ pool: data.pool });
   return {
     status: data.status,
-    count:  data.pool.length
+    count: data.pool.length
   };
 }
 
@@ -322,52 +322,49 @@ async function pickPlayer(captainId, userId) {
   if (!pool.includes(userId)) return { error: 'not-in-pool' };
 
   const radiant = picks.radiant;
-  const dire    = picks.dire;
+  const dire = picks.dire;
   const isRadTurn = radiant.length === dire.length;
-  const expected  = isRadTurn ? captain1 : captain2;
+  const expected = isRadTurn ? captain1 : captain2;
   if (captainId !== expected) return { error: 'not-your-turn' };
 
-  // 1) Ejecutar el pick
+  // 1) apply the pick
   if (isRadTurn) radiant.push(userId);
-  else            dire.push(userId);
+  else dire.push(userId);
 
-  // 2) Quitar al jugador del pool
+  // 2) remove from pool
   const newPool = pool.filter(id => id !== userId);
 
-  // 3) Cambiar default a 8 picks (4+4)
+  // 3) see if we’ve completed 5v5
   const MAX_PICKS = process.env.MAX_PICKS
     ? parseInt(process.env.MAX_PICKS, 10)
-    : 8;
+    : 10;
 
-  // 4) Si llegó al tope, finalizamos
   if (radiant.length + dire.length === MAX_PICKS) {
-    const teams     = { radiant: [...radiant], dire: [...dire] };
+    // build final teams
+    const teams = { radiant: [...radiant], dire: [...dire] };
     const lobbyName = generateLobbyName();
-    const password  = generatePassword();
+    const password = generatePassword();
 
-    // Archivar en finalizedMatches
-    await db.collection('finalizedMatches').add({
-      createdAt: new Date().toISOString(),
-      radiant:   { captain: captain1, players: teams.radiant },
-      dire:      { captain: captain2, players: teams.dire },
-      winner:    null,
+    // update in‑place instead of deleting
+    await ref.update({
+      teams,
+      status: 'ready',
       lobbyName,
-      password
+      password,
+      pool: [],     // optional
+      picks: null    // optional
     });
 
-    // Borrar el documento “current” para liberar el sistema
-    await ref.delete();
-
     return {
-      team:      isRadTurn ? 'Radiant' : 'Dire',
+      team: isRadTurn ? 'Radiant' : 'Dire',
       finalized: { lobbyName, password, teams }
     };
   }
 
-  // 5) Si aún no, actualizamos picks y pool
+  // 4) still drafting
   await ref.update({ pool: newPool, picks });
   return {
-    team:      isRadTurn ? 'Radiant' : 'Dire',
+    team: isRadTurn ? 'Radiant' : 'Dire',
     finalized: null
   };
 }
