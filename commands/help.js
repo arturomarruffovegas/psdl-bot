@@ -1,36 +1,46 @@
+// commands/help.js
 module.exports = {
-   name: '!help',
-   async execute(msg) {
-     return msg.channel.send(`
-  **Challenge Commands**
-  • \`!challenge <userId>\` — Initiate a captain‑pick match against another player.
-  • \`!accept\` / \`!reject\` — The challenged player accepts or declines a pending challenge.
-  • \`!sign\` — Join the current challenge pool once it's accepted.
-  • \`!unsign\` — Leave the challenge pool before picks begin.
-  • \`!pool\` — View who is signed up (with roles/tiers).
-  • \`!pick <userId>\` — (Challenge only) Captains alternate picking players from the pool.
-  • \`!abort\` — Cancel the current challenge.
-  • \`!result <radiant|dire>\` — Report the winning side of the match.
- 
-  **Start Commands**
-  • \`!start\` — Open a pickup‑style match; creator is auto‑signed and waits for the pool to fill.
-  • \`!sign\` — Join the open start match pool.
-  • \`!unsign\` — Leave the start match pool before it fills.
-  • \`!pool\` — View the current start match pool and its count (e.g. 3/10).
-  • \`!abort\` — Cancel the start match before it fills.
-  • \`!result <radiant|dire>\` — (Start only) Vote on which side won; 6 votes finalize.
- 
-  **General Commands**
-  • \`!info <matchId>\` — Get final match details (teams, lobby, password, winner).
-  • \`!teams\` — Show current team composition for an ongoing match.
-  • \`!players\`, \`!players t<N>\`, \`!cores\`, \`!supports\` — List registered players (with optional tier or role filters).
-  • \`!profile [<userId>]\` — View your or another player’s profile.
- 
-  **Admin Commands**
-  • \`!register <userId> <dotaId> "<Full Name>" <email> <discordTag> <core|support> <tier>\` — Add a new player.
-  • \`!unregister <userId>\` — Remove a player from the database.
-  • \`!activate <userId>\`, \`!deactivate <userId>\` — Toggle a player’s active status.
-  • \`!update <userId> <field> <value>\` — Update a player’s name, email, role, tier, or points.
-  `);
-   }
- };
+  name: '!help',
+  async execute(msg) {
+    return msg.channel.send(`
+**🎯 Challenge Commands**
+• \`!challenge <userId>\` — Initiate a captain‑pick match.
+• \`!accept\` / \`!reject\` — Respond to a pending challenge.
+• \`!sign\` — Join an open challenge or start match pool.
+• \`!unsign\` — Leave the pool before drafting or start.
+• \`!pool\` — View the current pool of sign‑ups.
+• \`!pick <userId>\` — (Challenge only) Captains pick players.
+• \`!abort\` — Cancel the current match in pre‑game.
+• \`!result <radiant|dire>\` — (Challenge) Report the winner.
+
+**🏁 Start Match Commands**
+• \`!start\` — Open a pickup‑style match; creator auto‑signs.
+• \`!sign\` — Join the start match pool.
+• \`!unsign\` — Leave before the start pool fills.
+• \`!pool\` — View pool count (e.g. 3/10).
+• \`!abort\` — Cancel the start match.
+• \`!result <radiant|dire>\` — (Start) Vote; 6 votes finalize.
+
+**ℹ️ Info & Utility**
+• \`!info <matchId>\` — Show finalized match details.
+• \`!teams\` — Show teams for any ongoing match you’re in.
+• \`!current\` — List all ongoing matches.
+• \`!version\` — Show the bot’s current version.
+• \`!nova\` — “Catch me on streaming at kick.com/novadota”.
+
+**👥 Player Directory**
+• \`!players\` — List all registered players.
+• \`!players t<N>\` — Filter by tier (e.g. t1, t2…).
+• \`!cores\` / \`!supports\` — List by role.
+• \`!profile [<userId>]\` — Show your or another’s profile.
+• \`!points <userId>\` — Show a player’s point total.
+
+**🛠️ Admin Commands**
+• \`!register <userId> <dotaId> "<Full Name>" <email> <discordTag> <core|support> <tier>\`  
+• \`!unregister <userId>\`  
+• \`!activate <userId>\` / \`!deactivate <userId>\`  
+• \`!update <userId> <field> <value>\` — name, email, role, tier, points.
+
+If I missed any commands (or you’d like them re‑grouped), let me know!`);
+  }
+};
