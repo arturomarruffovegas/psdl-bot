@@ -376,90 +376,146 @@ async function pickPlayer(captainId, userId) {
  * For start: voting by participants.
  */
 async function submitResult(userId, captainId, resultTeam, matchId) {
-  const ref = db.collection('ongoingMatches').doc(matchId);
+  const ref  = db.collection('ongoingMatches').doc(matchId);
   const snap = await ref.get();
   if (!snap.exists) return { error: 'no-match' };
   const data = snap.data();
 
-  if (!['radiant', 'dire'].includes(resultTeam)) {
+  // validate team
+  if (!['radiant','dire'].includes(resultTeam)) {
     return { error: 'invalid-team' };
   }
 
-  // challenge flow
+  // helper: normalize to plain arrays
+  const radArr = Array.isArray(data.teams.radiant.players)
+    ? data.teams.radiant.players
+    : data.teams.radiant;
+  const dirArr = Array.isArray(data.teams.dire.players)
+    ? data.teams.dire.players
+    : data.teams.dire;
+
+  // --- Challenge flow ---
   if (data.type === 'challenge') {
+    // only captains
     if (![data.captain1, data.captain2].includes(captainId)) {
       return { error: 'not-captain' };
     }
+
+    // build final record
     const finalRec = {
       createdAt: new Date().toISOString(),
-      radiant: { captain: data.captain1, players: data.teams.radiant.players },
-      dire: { captain: data.captain2, players: data.teams.dire.players },
-      winner: resultTeam,
+      radiant:   { captain: data.captain1, players: radArr },
+      dire:      { captain: data.captain2, players: dirArr },
+      winner:    resultTeam,
       lobbyName: data.lobbyName,
-      password: data.password
+      password:  data.password
     };
     const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
     // adjust points
-    const batch = db.batch(), delta = 25;
-    const win = resultTeam === 'radiant' ? data.teams.radiant : data.teams.dire;
-    const lose = resultTeam === 'radiant' ? data.teams.dire : data.teams.radiant;
-    for (const pid of [...win.players, win.captain]) {
-      const uref = db.collection('players').doc(pid), usnap = await uref.get();
-      if (usnap.exists) batch.update(uref, { points: (usnap.data().points || 1000) + delta });
+    const batch = db.batch();
+    const delta = 25;
+    const winnerTeam = resultTeam === 'radiant'
+      ? { captain: data.captain1, players: radArr }
+      : { captain: data.captain2, players: dirArr };
+    const loserTeam = resultTeam === 'radiant'
+      ? { captain: data.captain2, players: dirArr }
+      : { captain: data.captain1, players: radArr };
+
+    for (const pid of [...winnerTeam.players, winnerTeam.captain]) {
+      const uref = db.collection('players').doc(pid);
+      const usnap = await uref.get();
+      if (usnap.exists) {
+        const pts = usnap.data().points ?? 1000;
+        batch.update(uref, { points: pts + delta });
+      }
     }
-    for (const pid of [...lose.players, lose.captain]) {
-      const uref = db.collection('players').doc(pid), usnap = await uref.get();
-      if (usnap.exists) batch.update(uref, { points: (usnap.data().points || 1000) - delta });
+    for (const pid of [...loserTeam.players, loserTeam.captain]) {
+      const uref = db.collection('players').doc(pid);
+      const usnap = await uref.get();
+      if (usnap.exists) {
+        const pts = usnap.data().points ?? 1000;
+        batch.update(uref, { points: pts - delta });
+      }
     }
     await batch.commit();
 
+    // remove from ongoing
     await ref.delete();
+
     return { matchId: finalDocRef.id, winner: resultTeam };
   }
 
-  // start flow
+  // --- Start flow ---
   if (data.type === 'start') {
+    // init votes
     if (!data.votes) data.votes = { radiant: [], dire: [] };
+
+    // double‑voting?
     if (data.votes.radiant.includes(userId) || data.votes.dire.includes(userId)) {
       return { error: 'already-voted' };
     }
-    const participants = [...data.teams.radiant.players, ...data.teams.dire.players];
+
+    // only participants
+    const participants = [...radArr, ...dirArr];
     if (!participants.includes(userId)) {
       return { error: 'not-participant' };
     }
+
+    // record vote
     data.votes[resultTeam].push(userId);
     await ref.update({ votes: data.votes });
 
+    // finalize at 6 votes
     if (data.votes[resultTeam].length >= 6) {
       const finalRec = {
         createdAt: new Date().toISOString(),
-        radiant: { players: data.teams.radiant.players },
-        dire: { players: data.teams.dire.players },
-        winner: resultTeam,
+        radiant:   { players: radArr },
+        dire:      { players: dirArr },
+        winner:    resultTeam,
         lobbyName: data.lobbyName,
-        password: data.password
+        password:  data.password
       };
       const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
-      const batch = db.batch(), delta = 25;
-      const winIds = data.teams[resultTeam].players;
-      const loseIds = data.teams[resultTeam === 'radiant' ? 'dire' : 'radiant'].players;
-      for (const pid of winIds) {
-        const uref = db.collection('players').doc(pid), usnap = await uref.get();
-        if (usnap.exists) batch.update(uref, { points: (usnap.data().points || 1000) + delta });
+      // adjust points
+      const batch = db.batch();
+      const delta = 25;
+      const winners = resultTeam === 'radiant' ? radArr : dirArr;
+      const losers  = resultTeam === 'radiant' ? dirArr : radArr;
+      for (const pid of winners) {
+        const uref = db.collection('players').doc(pid);
+        const usnap = await uref.get();
+        if (usnap.exists) {
+          const pts = usnap.data().points ?? 1000;
+          batch.update(uref, { points: pts + delta });
+        }
       }
-      for (const pid of loseIds) {
-        const uref = db.collection('players').doc(pid), usnap = await uref.get();
-        if (usnap.exists) batch.update(uref, { points: (usnap.data().points || 1000) - delta });
+      for (const pid of losers) {
+        const uref = db.collection('players').doc(pid);
+        const usnap = await uref.get();
+        if (usnap.exists) {
+          const pts = usnap.data().points ?? 1000;
+          batch.update(uref, { points: pts - delta });
+        }
       }
       await batch.commit();
 
+      // remove from ongoing
       await ref.delete();
-      return { status: 'finalized', matchId: finalDocRef.id, winner: resultTeam };
+
+      return {
+        status:  'finalized',
+        matchId: finalDocRef.id,
+        winner:  resultTeam
+      };
     }
 
-    return { status: 'pending', votes: data.votes };
+    // still voting
+    return {
+      status: 'pending',
+      votes:  data.votes
+    };
   }
 
   return { error: 'unknown-match-type' };
