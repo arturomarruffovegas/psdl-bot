@@ -34,13 +34,13 @@ module.exports = {
         if (filtered.length === 0) {
           return message.channel.send(`⚠️ No players found in Tier ${tier}.`);
         }
-        title = `📋 Tier ${tier} Players (${filtered.length}) — Total Players: ${totalCount}`;
+        title = `📋 Tier ${tier} Players (${filtered.length}) — Total Active: ${totalCount}`;
         list  = formatList(filtered);
       } else {
         if (allPlayers.length === 0) {
           return message.channel.send(`⚠️ No registered players found.`);
         }
-        title = `📋 Registered Players (${allPlayers.length}) — Total Players: ${totalCount}`;
+        title = `📋 Registered Players (${allPlayers.length}) — Total Active: ${totalCount}`;
         list  = formatList(allPlayers);
       }
 
@@ -52,13 +52,13 @@ module.exports = {
         if (tiered.length === 0) {
           return message.channel.send(`⚠️ No core players found in Tier ${tier}.`);
         }
-        title = `🔥 Core Tier ${tier} (${tiered.length}) — Total Players: ${totalCount}`;
+        title = `🔥 Core Tier ${tier} (${tiered.length}) — Total Cores: ${coreCount}`;
         list  = formatList(tiered);
       } else {
         if (cores.length === 0) {
           return message.channel.send(`⚠️ No core players found.`);
         }
-        title = `🔥 Cores (${cores.length}) — Total Players: ${totalCount}`;
+        title = `🔥 Cores (${cores.length}) — Total Cores: ${coreCount}`;
         list  = formatList(cores);
       }
 
@@ -70,20 +70,21 @@ module.exports = {
         if (tiered.length === 0) {
           return message.channel.send(`⚠️ No support players found in Tier ${tier}.`);
         }
-        title = `🛡️ Support Tier ${tier} (${tiered.length}) — Total Players: ${totalCount}`;
+        title = `🛡️ Support Tier ${tier} (${tiered.length}) — Total Supports: ${supCount}`;
         list  = formatList(tiered);
       } else {
         if (supports.length === 0) {
           return message.channel.send(`⚠️ No support players found.`);
         }
-        title = `🛡️ Supports (${supports.length}) — Total Players: ${totalCount}`;
+        title = `🛡️ Supports (${supports.length}) — Total Supports: ${supCount}`;
         list  = formatList(supports);
       }
     }
 
     // 4) Prepare monospaced table lines
-    const header = '`ID`.           `ROLE`   `TI`'
-                     + '────────────────────────────';
+    const header = 
+    '`ID`.           `ROLE`   `TI`\n' +
+    '────────────────────────────\n';
     const lines = list.split('\n').map(line => {
       const m = /• `(.+?)` — \((\w+)\s*-\s*T(\d)\)/.exec(line);
       if (m) {
