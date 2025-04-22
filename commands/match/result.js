@@ -1,41 +1,81 @@
 // commands/match/result.js
 const playerService = require('../../services/playerService');
 const matchService  = require('../../services/matchService');
+const db            = require('../../services/db');
 
 module.exports = {
   name: '!result',
   async execute(message, args) {
-    // 1) Validate arguments
-    if (args.length !== 1) {
-      return message.channel.send('❌ Usage: `!result <radiant|dire>`');
+    // Fetch all ongoing matches
+    const snap = await db.collection('ongoingMatches').get();
+    const docs = snap.docs;
+
+    if (docs.length === 0) {
+      return message.channel.send('❌ There are no ongoing matches to result.');
     }
-    const resultTeam = args[0].toLowerCase();
+
+    let selectedDoc;
+    let resultTeam;
+
+    if (docs.length === 1) {
+      // Single match: expect !result <radiant|dire>
+      if (args.length !== 1) {
+        return message.channel.send('❌ Usage: `!result <radiant|dire>`');
+      }
+      resultTeam = args[0].toLowerCase();
+      selectedDoc = docs[0];
+    } else {
+      // Multiple matches: expect !result <matchNumber> <radiant|dire>
+      if (args.length !== 2) {
+        return message.channel.send(
+          '❌ Usage: `!result <matchNumber> <radiant|dire>`\n' +
+          'Use `!current` to see match numbers.'
+        );
+      }
+      const idx = parseInt(args[0], 10);
+      if (isNaN(idx) || idx < 1 || idx > docs.length) {
+        return message.channel.send(
+          `❌ Invalid match number. Please choose between 1 and ${docs.length}. Use \`!current\` to see them.`
+        );
+      }
+      resultTeam = args[1].toLowerCase();
+      selectedDoc = docs[idx - 1];
+    }
+
+    // Validate team argument
     if (!['radiant', 'dire'].includes(resultTeam)) {
       return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
     }
 
-    // 2) Look up the caller’s profile
+    // Identify sender
     const username = message.author.username.toLowerCase();
     const profile  = await playerService.getPlayerProfileByUsername(username);
-    if (!profile) {
-      return message.channel.send('❌ You are not registered.');
+    // Check for Discord role named "Admin"
+    const isAdmin = message.member.roles.cache.some(r => r.name === 'Admin');
+
+    // If not admin, ensure they're in the match
+    const matchData = selectedDoc.data();
+    if (!isAdmin) {
+      if (!profile) {
+        return message.channel.send('❌ You are not registered.');
+      }
+      const ongoingForUser = await matchService.getOngoingMatchForUser(profile.id);
+      if (!ongoingForUser || ongoingForUser.id !== selectedDoc.id) {
+        return message.channel.send('❌ You are not a participant of that match.');
+      }
     }
 
-    // 3) Find the ongoing match for this user
-    const ongoing = await matchService.getOngoingMatchForUser(profile.id);
-    if (!ongoing) {
-      return message.channel.send('❌ You are not currently in an ongoing match.');
-    }
-
-    // 4) Submit the result
+    // Submit result (admin bypasses participant rules)
+    const userId    = profile ? profile.id : 'admin';
+    const captainId = isAdmin ? userId : profile.id;
     const res = await matchService.submitResult(
-      profile.id,    // userId
-      profile.id,    // captainId (for challenge)
-      resultTeam,    // “radiant” or “dire”
-      ongoing.id     // the doc ID in ongoingMatches
+      userId,
+      captainId,
+      resultTeam,
+      selectedDoc.id
     );
 
-    // 5) Handle any errors
+    // Handle errors
     if (res.error) {
       switch (res.error) {
         case 'invalid-team':
@@ -48,38 +88,39 @@ module.exports = {
           return message.channel.send('⚠️ You have already voted.');
         case 'not-participant':
           return message.channel.send('❌ You are not a participant of this match.');
+        case 'already-submitted':
+          return message.channel.send('❌ Match result has already been recorded.');
         default:
           return message.channel.send(`❌ Error: ${res.error}`);
       }
     }
 
-    // 6) Success!
-    if (ongoing.type === 'challenge') {
-      // single submission by captains
+    // Success response
+    if (matchData.type === 'challenge') {
       return message.channel.send(
         `🏆 Match result recorded: **${res.winner.toUpperCase()}** wins!\n` +
-        `Challenge closed.\n` +
+        `Match closed.\n` +
         `Match ID: \`${res.matchId}\`\n` +
-        `Review with \`!info <matchId>\``
+        `Review with \`!info ${res.matchId}\``
       );
     } else {
-      // start‑match voting flow
+      // Start match voting flow
       if (res.status === 'pending') {
         const r = res.votes.radiant;
         const d = res.votes.dire;
         return message.channel.send(
           `✅ Your vote for **${resultTeam.toUpperCase()}** has been recorded!\n\n` +
-          `🟢 Radiant (${r.length} vote${r.length !== 1 ? 's' : ''}): ` +
-            (r.length ? r.map(id => `\`${id}\``).join(', ') : '—') + '\n' +
-          `🔴 Dire    (${d.length} vote${d.length !== 1 ? 's' : ''}): ` +
+          `🟢 Radiant (${r.length}): ` +
+            (r.length ? r.map(id => `\`${id}\``).join(', ') : '—') + `\n` +
+          `🔴 Dire    (${d.length}): ` +
             (d.length ? d.map(id => `\`${id}\``).join(', ') : '—')
         );
       }
-      // finalized
+      // Finalized
       return message.channel.send(
         `🏆 Match result finalized: **${res.winner.toUpperCase()}** wins!\n` +
         `Match ID: \`${res.matchId}\`\n` +
-        `Review with \`!info <matchId>\``
+        `Review with \`!info ${res.matchId}\``
       );
     }
   }
