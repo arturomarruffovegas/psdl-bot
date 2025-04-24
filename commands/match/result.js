@@ -7,39 +7,71 @@ module.exports = {
   name: '!result',
   async execute(message, args) {
     // Fetch all ongoing matches
-    const snap = await db.collection('ongoingMatches').get();
-    const docs = snap.docs;
+    const snap   = await db.collection('ongoingMatches').get();
+    const docs   = snap.docs;
+    const count  = docs.length;
 
-    if (docs.length === 0) {
+    // Check for Discord role named "Admin"
+    const isAdmin = message.member.roles.cache.some(r => r.name === 'Admin');
+
+    if (count === 0) {
       return message.channel.send('❌ There are no ongoing matches to result.');
     }
 
     let selectedDoc;
     let resultTeam;
 
-    if (docs.length === 1) {
-      // Single match: expect !result <radiant|dire>
-      if (args.length !== 1) {
-        return message.channel.send('❌ Usage: `!result <radiant|dire>`');
+    if (isAdmin) {
+      // ─────── ADMIN FLOW ───────
+      if (count === 1) {
+        // Single match: !result <radiant|dire>
+        if (args.length !== 1) {
+          return message.channel.send('❌ Admin usage: `!result <radiant|dire>`');
+        }
+        resultTeam  = args[0].toLowerCase();
+        selectedDoc = docs[0];
+      } else {
+        // Multiple matches: !result <matchId> <radiant|dire>
+        if (args.length !== 2) {
+          return message.channel.send(
+            '❌ Admin usage: `!result <matchId> <radiant|dire>`\n' +
+            'Use `!current` to list all match IDs.'
+          );
+        }
+        const [matchId, teamArg] = args;
+        selectedDoc = docs.find(doc => doc.id === matchId);
+        if (!selectedDoc) {
+          return message.channel.send(`❌ Could not find a match with ID \`${matchId}\`.`);
+        }
+        resultTeam = teamArg.toLowerCase();
       }
-      resultTeam = args[0].toLowerCase();
-      selectedDoc = docs[0];
+
     } else {
-      // Multiple matches: expect !result <matchNumber> <radiant|dire>
-      if (args.length !== 2) {
-        return message.channel.send(
-          '❌ Usage: `!result <matchNumber> <radiant|dire>`\n' +
-          'Use `!current` to see match numbers.'
-        );
+      // ───── CAPTAIN FLOW ─────
+      if (count === 1) {
+        // Single match: !result <radiant|dire>
+        if (args.length !== 1) {
+          return message.channel.send('❌ Usage: `!result <radiant|dire>`');
+        }
+        resultTeam  = args[0].toLowerCase();
+        selectedDoc = docs[0];
+      } else {
+        // Multiple matches: !result <matchNumber> <radiant|dire>
+        if (args.length !== 2) {
+          return message.channel.send(
+            '❌ Usage: `!result <matchNumber> <radiant|dire>`\n' +
+            'Use `!current` to see match numbers.'
+          );
+        }
+        const idx = parseInt(args[0], 10);
+        if (isNaN(idx) || idx < 1 || idx > count) {
+          return message.channel.send(
+            `❌ Invalid match number. Please choose between 1 and ${count}. Use \`!current\` to see them.`
+          );
+        }
+        resultTeam  = args[1].toLowerCase();
+        selectedDoc = docs[idx - 1];
       }
-      const idx = parseInt(args[0], 10);
-      if (isNaN(idx) || idx < 1 || idx > docs.length) {
-        return message.channel.send(
-          `❌ Invalid match number. Please choose between 1 and ${docs.length}. Use \`!current\` to see them.`
-        );
-      }
-      resultTeam = args[1].toLowerCase();
-      selectedDoc = docs[idx - 1];
     }
 
     // Validate team argument
@@ -50,11 +82,9 @@ module.exports = {
     // Identify sender
     const username = message.author.username.toLowerCase();
     const profile  = await playerService.getPlayerProfileByUsername(username);
-    // Check for Discord role named "Admin"
-    const isAdmin = message.member.roles.cache.some(r => r.name === 'Admin');
-
-    // If not admin, ensure they're in the match
     const matchData = selectedDoc.data();
+
+    // If not admin, ensure they're a participant
     if (!isAdmin) {
       if (!profile) {
         return message.channel.send('❌ You are not registered.');
@@ -68,7 +98,7 @@ module.exports = {
     // Submit result (admin bypasses participant rules)
     const userId    = profile ? profile.id : 'admin';
     const captainId = isAdmin ? userId : profile.id;
-    const res = await matchService.submitResult(
+    const res       = await matchService.submitResult(
       userId,
       captainId,
       resultTeam,
@@ -104,7 +134,7 @@ module.exports = {
         `Review with \`!info ${res.matchId}\``
       );
     } else {
-      // Start match voting flow
+      // Voting flow for normal matches
       if (res.status === 'pending') {
         const r = res.votes.radiant;
         const d = res.votes.dire;
