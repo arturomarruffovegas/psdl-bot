@@ -10,32 +10,14 @@ module.exports = {
 
     let matchId, resultTeam, data;
 
-    if (isAdmin) {
-      // ───── ADMIN: must supply matchId + team ─────
-      if (args.length !== 2) {
-        return message.channel.send(
-          '❌ Admin usage: `!result <matchId> <radiant|dire>`\n' +
-          'Use `!current` to list matches.'
-        );
-      }
-      [matchId, resultTeam] = [args[0], args[1].toLowerCase()];
-      if (!['radiant','dire'].includes(resultTeam)) {
-        return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
-      }
-      const snap = await db.collection('ongoingMatches').doc(matchId).get();
-      if (!snap.exists) {
-        return message.channel.send(`❌ No ongoing match with ID \`${matchId}\`.`);
-      }
-      data = snap.data();
-    } else {
-      // ───── PLAYER: must supply only team ─────
-      if (args.length !== 1) {
-        return message.channel.send('❌ Usage: `!result <radiant|dire>`');
-      }
+    // PLAYER FLOW: single-arg shorthand works for anyone in a match
+    if (args.length === 1) {
       resultTeam = args[0].toLowerCase();
       if (!['radiant','dire'].includes(resultTeam)) {
         return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
       }
+
+      // find the caller's ongoing match
       const username = message.author.username.toLowerCase();
       const profile  = await playerService.getPlayerProfileByUsername(username);
       if (!profile) {
@@ -45,81 +27,52 @@ module.exports = {
       if (!ongoing) {
         return message.channel.send('❌ You are not in any ongoing match.');
       }
+
       matchId = ongoing.id;
       data    = ongoing;
     }
-
-    // Admin finalizing a start‐type match immediately
-    if (isAdmin && data.type === 'start') {
-      // normalize player arrays
-      const radArr = Array.isArray(data.teams.radiant.players)
-        ? data.teams.radiant.players
-        : data.teams.radiant;
-      const dirArr = Array.isArray(data.teams.dire.players)
-        ? data.teams.dire.players
-        : data.teams.dire;
-
-      // build finalized record
-      const finalRec = {
-        createdAt: new Date().toISOString(),
-        radiant:   { players: radArr },
-        dire:      { players: dirArr },
-        winner:    resultTeam,
-        lobbyName: data.lobbyName,
-        password:  data.password
-      };
-      const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
-
-      // adjust points
-      const batch = db.batch();
-      const delta = 25;
-      const winners = resultTeam === 'radiant' ? radArr : dirArr;
-      const losers  = resultTeam === 'radiant' ? dirArr : radArr;
-      for (const pid of winners) {
-        const uref = db.collection('players').doc(pid);
-        const usnap = await uref.get();
-        if (usnap.exists) {
-          const pts = usnap.data().points ?? 1000;
-          batch.update(uref, { points: pts + delta });
-        }
+    // ADMIN FLOW: two-arg explicit
+    else if (isAdmin && args.length === 2) {
+      [matchId, resultTeam] = [args[0], args[1].toLowerCase()];
+      if (!['radiant','dire'].includes(resultTeam)) {
+        return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
       }
-      for (const pid of losers) {
-        const uref = db.collection('players').doc(pid);
-        const usnap = await uref.get();
-        if (usnap.exists) {
-          const pts = usnap.data().points ?? 1000;
-          batch.update(uref, { points: pts - delta });
-        }
+
+      const snap = await db.collection('ongoingMatches').doc(matchId).get();
+      if (!snap.exists) {
+        return message.channel.send(`❌ No ongoing match with ID \`${matchId}\`.`);
       }
-      await batch.commit();
-
-      // remove from ongoing
-      await db.collection('ongoingMatches').doc(matchId).delete();
-
-      return message.channel.send(
-        `🏆 Match result recorded: **${resultTeam.toUpperCase()}** wins!\n` +
-        `Match ID: \`${finalDocRef.id}\`\n` +
-        `Review with \`!info ${finalDocRef.id}\``
-      );
+      data = snap.data();
+    }
+    // otherwise invalid usage
+    else {
+      // if caller is admin, remind about two-arg
+      if (isAdmin) {
+        return message.channel.send(
+          '❌ Admin usage: `!result <matchId> <radiant|dire>`\n' +
+          'Or, as a participant, simply: `!result <radiant|dire>`'
+        );
+      }
+      // non-admin incorrect usage
+      return message.channel.send('❌ Usage: `!result <radiant|dire>`');
     }
 
-    // For challenge (any) or player‐voting start
-    // Identify userId and captainId
+    // Now we have matchId, resultTeam, and match data.
+    // Identify IDs for submission:
     const username = message.author.username.toLowerCase();
     const profile  = await playerService.getPlayerProfileByUsername(username);
     const userId   = profile ? profile.id : 'admin';
+
     let captainId;
     if (data.type === 'challenge') {
-      // admin override picks the captain of the winning side
-      captainId = isAdmin
-        ? (resultTeam === 'radiant' ? data.captain1 : data.captain2)
-        : profile.id;
+      // challenge requires captain-level submission
+      captainId = profile ? profile.id : 'admin';
     } else {
-      // start type: captainId unused
-      captainId = profile.id;
+      // start matches use voting—captainId not used
+      captainId = profile ? profile.id : 'admin';
     }
 
-    // Submit via matchService
+    // Submit the result
     const res = await matchService.submitResult(
       userId,
       captainId,
@@ -147,7 +100,7 @@ module.exports = {
       }
     }
 
-    // Success response
+    // Success
     if (data.type === 'challenge') {
       return message.channel.send(
         `🏆 Match result recorded: **${res.winner.toUpperCase()}** wins!\n` +
@@ -156,7 +109,7 @@ module.exports = {
         `Review with \`!info ${res.matchId}\``
       );
     } else {
-      // start‐match voting flow
+      // start‐match voting
       if (res.status === 'pending') {
         const r = res.votes.radiant;
         const d = res.votes.dire;
