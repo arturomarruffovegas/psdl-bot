@@ -6,103 +6,125 @@ const db            = require('../../services/db');
 module.exports = {
   name: '!result',
   async execute(message, args) {
-    // Fetch all ongoing matches
-    const snap   = await db.collection('ongoingMatches').get();
-    const docs   = snap.docs;
-    const count  = docs.length;
-
-    // Check for Discord role named "Admin"
     const isAdmin = message.member.roles.cache.some(r => r.name === 'Admin');
 
-    if (count === 0) {
-      return message.channel.send('❌ There are no ongoing matches to result.');
-    }
-
-    let selectedDoc;
-    let resultTeam;
+    let matchId, resultTeam, data;
 
     if (isAdmin) {
-      // ─────── ADMIN FLOW ───────
-      if (count === 1) {
-        // Single match: !result <radiant|dire>
-        if (args.length !== 1) {
-          return message.channel.send('❌ Admin usage: `!result <radiant|dire>`');
-        }
-        resultTeam  = args[0].toLowerCase();
-        selectedDoc = docs[0];
-      } else {
-        // Multiple matches: !result <matchId> <radiant|dire>
-        if (args.length !== 2) {
-          return message.channel.send(
-            '❌ Admin usage: `!result <matchId> <radiant|dire>`\n' +
-            'Use `!current` to list all match IDs.'
-          );
-        }
-        const [matchId, teamArg] = args;
-        selectedDoc = docs.find(doc => doc.id === matchId);
-        if (!selectedDoc) {
-          return message.channel.send(`❌ Could not find a match with ID \`${matchId}\`.`);
-        }
-        resultTeam = teamArg.toLowerCase();
+      // ───── ADMIN: must supply matchId + team ─────
+      if (args.length !== 2) {
+        return message.channel.send(
+          '❌ Admin usage: `!result <matchId> <radiant|dire>`\n' +
+          'Use `!current` to list matches.'
+        );
       }
-
+      [matchId, resultTeam] = [args[0], args[1].toLowerCase()];
+      if (!['radiant','dire'].includes(resultTeam)) {
+        return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
+      }
+      const snap = await db.collection('ongoingMatches').doc(matchId).get();
+      if (!snap.exists) {
+        return message.channel.send(`❌ No ongoing match with ID \`${matchId}\`.`);
+      }
+      data = snap.data();
     } else {
-      // ───── CAPTAIN FLOW ─────
-      if (count === 1) {
-        // Single match: !result <radiant|dire>
-        if (args.length !== 1) {
-          return message.channel.send('❌ Usage: `!result <radiant|dire>`');
-        }
-        resultTeam  = args[0].toLowerCase();
-        selectedDoc = docs[0];
-      } else {
-        // Multiple matches: !result <matchNumber> <radiant|dire>
-        if (args.length !== 2) {
-          return message.channel.send(
-            '❌ Usage: `!result <matchNumber> <radiant|dire>`\n' +
-            'Use `!current` to see match numbers.'
-          );
-        }
-        const idx = parseInt(args[0], 10);
-        if (isNaN(idx) || idx < 1 || idx > count) {
-          return message.channel.send(
-            `❌ Invalid match number. Please choose between 1 and ${count}. Use \`!current\` to see them.`
-          );
-        }
-        resultTeam  = args[1].toLowerCase();
-        selectedDoc = docs[idx - 1];
+      // ───── PLAYER: must supply only team ─────
+      if (args.length !== 1) {
+        return message.channel.send('❌ Usage: `!result <radiant|dire>`');
       }
-    }
-
-    // Validate team argument
-    if (!['radiant', 'dire'].includes(resultTeam)) {
-      return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
-    }
-
-    // Identify sender
-    const username = message.author.username.toLowerCase();
-    const profile  = await playerService.getPlayerProfileByUsername(username);
-    const matchData = selectedDoc.data();
-
-    // If not admin, ensure they're a participant
-    if (!isAdmin) {
+      resultTeam = args[0].toLowerCase();
+      if (!['radiant','dire'].includes(resultTeam)) {
+        return message.channel.send('❌ Invalid team. Use `radiant` or `dire`.');
+      }
+      const username = message.author.username.toLowerCase();
+      const profile  = await playerService.getPlayerProfileByUsername(username);
       if (!profile) {
         return message.channel.send('❌ You are not registered.');
       }
-      const ongoingForUser = await matchService.getOngoingMatchForUser(profile.id);
-      if (!ongoingForUser || ongoingForUser.id !== selectedDoc.id) {
-        return message.channel.send('❌ You are not a participant of that match.');
+      const ongoing  = await matchService.getOngoingMatchForUser(profile.id);
+      if (!ongoing) {
+        return message.channel.send('❌ You are not in any ongoing match.');
       }
+      matchId = ongoing.id;
+      data    = ongoing;
     }
 
-    // Submit result (admin bypasses participant rules)
-    const userId    = profile ? profile.id : 'admin';
-    const captainId = isAdmin ? userId : profile.id;
-    const res       = await matchService.submitResult(
+    // Admin finalizing a start‐type match immediately
+    if (isAdmin && data.type === 'start') {
+      // normalize player arrays
+      const radArr = Array.isArray(data.teams.radiant.players)
+        ? data.teams.radiant.players
+        : data.teams.radiant;
+      const dirArr = Array.isArray(data.teams.dire.players)
+        ? data.teams.dire.players
+        : data.teams.dire;
+
+      // build finalized record
+      const finalRec = {
+        createdAt: new Date().toISOString(),
+        radiant:   { players: radArr },
+        dire:      { players: dirArr },
+        winner:    resultTeam,
+        lobbyName: data.lobbyName,
+        password:  data.password
+      };
+      const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
+
+      // adjust points
+      const batch = db.batch();
+      const delta = 25;
+      const winners = resultTeam === 'radiant' ? radArr : dirArr;
+      const losers  = resultTeam === 'radiant' ? dirArr : radArr;
+      for (const pid of winners) {
+        const uref = db.collection('players').doc(pid);
+        const usnap = await uref.get();
+        if (usnap.exists) {
+          const pts = usnap.data().points ?? 1000;
+          batch.update(uref, { points: pts + delta });
+        }
+      }
+      for (const pid of losers) {
+        const uref = db.collection('players').doc(pid);
+        const usnap = await uref.get();
+        if (usnap.exists) {
+          const pts = usnap.data().points ?? 1000;
+          batch.update(uref, { points: pts - delta });
+        }
+      }
+      await batch.commit();
+
+      // remove from ongoing
+      await db.collection('ongoingMatches').doc(matchId).delete();
+
+      return message.channel.send(
+        `🏆 Match result recorded: **${resultTeam.toUpperCase()}** wins!\n` +
+        `Match ID: \`${finalDocRef.id}\`\n` +
+        `Review with \`!info ${finalDocRef.id}\``
+      );
+    }
+
+    // For challenge (any) or player‐voting start
+    // Identify userId and captainId
+    const username = message.author.username.toLowerCase();
+    const profile  = await playerService.getPlayerProfileByUsername(username);
+    const userId   = profile ? profile.id : 'admin';
+    let captainId;
+    if (data.type === 'challenge') {
+      // admin override picks the captain of the winning side
+      captainId = isAdmin
+        ? (resultTeam === 'radiant' ? data.captain1 : data.captain2)
+        : profile.id;
+    } else {
+      // start type: captainId unused
+      captainId = profile.id;
+    }
+
+    // Submit via matchService
+    const res = await matchService.submitResult(
       userId,
       captainId,
       resultTeam,
-      selectedDoc.id
+      matchId
     );
 
     // Handle errors
@@ -117,7 +139,7 @@ module.exports = {
         case 'already-voted':
           return message.channel.send('⚠️ You have already voted.');
         case 'not-participant':
-          return message.channel.send('❌ You are not a participant of this match.');
+          return message.channel.send('❌ You are not a participant of that match.');
         case 'already-submitted':
           return message.channel.send('❌ Match result has already been recorded.');
         default:
@@ -126,7 +148,7 @@ module.exports = {
     }
 
     // Success response
-    if (matchData.type === 'challenge') {
+    if (data.type === 'challenge') {
       return message.channel.send(
         `🏆 Match result recorded: **${res.winner.toUpperCase()}** wins!\n` +
         `Match closed.\n` +
@@ -134,19 +156,17 @@ module.exports = {
         `Review with \`!info ${res.matchId}\``
       );
     } else {
-      // Voting flow for normal matches
+      // start‐match voting flow
       if (res.status === 'pending') {
         const r = res.votes.radiant;
         const d = res.votes.dire;
         return message.channel.send(
           `✅ Your vote for **${resultTeam.toUpperCase()}** has been recorded!\n\n` +
-          `🟢 Radiant (${r.length}): ` +
-            (r.length ? r.map(id => `\`${id}\``).join(', ') : '—') + `\n` +
-          `🔴 Dire    (${d.length}): ` +
-            (d.length ? d.map(id => `\`${id}\``).join(', ') : '—')
+          `🟢 Radiant (${r.length}): ${r.length ? r.map(id => `\`${id}\``).join(', ') : '—'}\n` +
+          `🔴 Dire    (${d.length}): ${d.length ? d.map(id => `\`${id}\``).join(', ') : '—'}`
         );
       }
-      // Finalized
+      // finalized
       return message.channel.send(
         `🏆 Match result finalized: **${res.winner.toUpperCase()}** wins!\n` +
         `Match ID: \`${res.matchId}\`\n` +
