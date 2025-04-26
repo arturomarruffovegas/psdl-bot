@@ -612,5 +612,6 @@ module.exports = {
   abortMatch,
   pickPlayer,
   submitResult,
-  removeFromPool
+  removeFromPool,
+  adminCloseMatch
 };
