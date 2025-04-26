@@ -379,21 +379,20 @@ async function pickPlayer(captainId, userId) {
  */
 async function adminCloseMatch(matchId, winner) {
   const ongoingRef = db.collection('ongoingMatches').doc(matchId);
-  const snap = await ongoingRef.get();
+  const snap       = await ongoingRef.get();
   if (!snap.exists) {
     return { error: 'no-match' };
   }
-
+  // 1) grab and annotate the data
   const data = snap.data();
-  // add your result fields
-  data.winner = winner;
+  data.winner   = winner;
   data.closedAt = new Date().toISOString();
-  data.status = 'closed';
+  data.status   = 'closed';
 
-  // 1) Archive into "matches"
-  await db.collection('matches').doc(matchId).set(data);
+  // 2) archive it under `finalizedMatches`
+  await db.collection('finalizedMatches').doc(matchId).set(data);
 
-  // 2) Remove from ongoingMatches
+  // 3) remove it so it no longer appears in ongoingMatches
   await ongoingRef.delete();
 
   return { matchId, winner };
