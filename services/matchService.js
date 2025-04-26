@@ -230,16 +230,16 @@ async function signToPool(userId) {
       }
 
       // balance teams & make lobby/password
-      const teams     = balanceStartTeams(valid);
+      const teams = balanceStartTeams(valid);
       const lobbyName = generateLobbyName();
-      const password  = generatePassword();
+      const password = generatePassword();
 
       // move into ongoingMatches
       const ongoingRec = {
         createdAt: new Date().toISOString(),
-        type:      'start',
-        teams:     { radiant: teams.radiant, dire: teams.dire },
-        votes:     { radiant: [], dire: [] },
+        type: 'start',
+        teams: { radiant: teams.radiant, dire: teams.dire },
+        votes: { radiant: [], dire: [] },
         lobbyName,
         password
       };
@@ -250,8 +250,8 @@ async function signToPool(userId) {
 
       // signal “ready” (so your !sign command shows the embed)
       return {
-        status:    'ready',
-        matchId:   ongoingRef.id,
+        status: 'ready',
+        matchId: ongoingRef.id,
         teams,
         finalized: { lobbyName, password }
       };
@@ -259,8 +259,8 @@ async function signToPool(userId) {
 
     // still filling
     return {
-      status:   data.status,
-      count:    data.pool.length,
+      status: data.status,
+      count: data.pool.length,
       poolSize: POOL_SIZE
     };
   }
@@ -269,7 +269,7 @@ async function signToPool(userId) {
   await ref.update({ pool: data.pool });
   return {
     status: data.status,
-    count:  data.pool.length
+    count: data.pool.length
   };
 }
 
@@ -334,9 +334,9 @@ async function pickPlayer(captainId, userId) {
     : 8;
 
   if (picks.radiant.length + picks.dire.length === MAX_PICKS) {
-    const teams     = { radiant: picks.radiant.slice(), dire: picks.dire.slice() };
+    const teams = { radiant: picks.radiant.slice(), dire: picks.dire.slice() };
     const lobbyName = generateLobbyName();
-    const password  = generatePassword();
+    const password = generatePassword();
 
     // archive to ongoingMatches
     const onRec = {
@@ -346,9 +346,9 @@ async function pickPlayer(captainId, userId) {
       captain2,
       teams: {
         radiant: { captain: captain1, players: teams.radiant },
-        dire:    { captain: captain2, players: teams.dire }
+        dire: { captain: captain2, players: teams.dire }
       },
-      winner:    null,
+      winner: null,
       lobbyName,
       password
     };
@@ -356,19 +356,45 @@ async function pickPlayer(captainId, userId) {
     await ref.delete();
 
     return {
-      team:      isRadTurn ? 'Radiant' : 'Dire',
+      team: isRadTurn ? 'Radiant' : 'Dire',
       finalized: { lobbyName, password, teams },
-      status:    'ongoing',
-      matchId:   onRef.id
+      status: 'ongoing',
+      matchId: onRef.id
     };
   }
 
   // still drafting
   await ref.update({ pool: newPool, picks });
   return {
-    team:      isRadTurn ? 'Radiant' : 'Dire',
+    team: isRadTurn ? 'Radiant' : 'Dire',
     finalized: null
   };
+}
+
+/**
+ * Admin-only: force-close any match immediately.
+ * @param {string} matchId
+ * @param {'radiant'|'dire'} winner
+ * @returns {{ matchId: string, winner: string }|{ error: string }}
+ */
+async function adminCloseMatch(matchId, winner) {
+  try {
+    const ref = db.collection('ongoingMatches').doc(matchId);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      return { error: 'no-match' };
+    }
+    // write whatever schema fields your submitResult does:
+    await ref.update({
+      status: 'closed',
+      winner,
+      closedAt: new Date().toISOString()
+    });
+    // optionally move to a "matches" collection, etc.
+    return { matchId, winner };
+  } catch (err) {
+    return { error: err.message };
+  }
 }
 
 /**
@@ -435,11 +461,11 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     // Build the finalized record
     const finalRec = {
       createdAt: new Date().toISOString(),
-      radiant:   { captain: data.captain1, players: radArr },
-      dire:      { captain: data.captain2, players: dirArr },
-      winner:    resultTeam,
+      radiant: { captain: data.captain1, players: radArr },
+      dire: { captain: data.captain2, players: dirArr },
+      winner: resultTeam,
       lobbyName: data.lobbyName,
-      password:  data.password
+      password: data.password
     };
     const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
@@ -487,7 +513,7 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     // only participants may vote
     const participants = [
       ...(Array.isArray(data.teams.radiant.players) ? data.teams.radiant.players : data.teams.radiant),
-      ...(Array.isArray(data.teams.dire.players)    ? data.teams.dire.players    : data.teams.dire)
+      ...(Array.isArray(data.teams.dire.players) ? data.teams.dire.players : data.teams.dire)
     ];
     if (!participants.includes(userId)) {
       return { error: 'not-participant' };
@@ -501,11 +527,11 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
     if (data.votes[resultTeam].length >= 6) {
       const finalRec = {
         createdAt: new Date().toISOString(),
-        radiant:   { players: participants.slice(0, participants.length / 2) },
-        dire:      { players: participants.slice(participants.length / 2) },
-        winner:    resultTeam,
+        radiant: { players: participants.slice(0, participants.length / 2) },
+        dire: { players: participants.slice(participants.length / 2) },
+        winner: resultTeam,
         lobbyName: data.lobbyName,
-        password:  data.password
+        password: data.password
       };
       const finalDocRef = await db.collection('finalizedMatches').add(finalRec);
 
@@ -541,16 +567,16 @@ async function submitResult(userId, captainId, resultTeam, matchId) {
       await ref.delete();
 
       return {
-        status:  'finalized',
+        status: 'finalized',
         matchId: finalDocRef.id,
-        winner:  resultTeam
+        winner: resultTeam
       };
     }
 
     // still voting
     return {
       status: 'pending',
-      votes:  data.votes
+      votes: data.votes
     };
   }
 
