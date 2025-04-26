@@ -377,24 +377,26 @@ async function pickPlayer(captainId, userId) {
  * @param {'radiant'|'dire'} winner
  * @returns {{ matchId: string, winner: string }|{ error: string }}
  */
-async function adminCloseMatch(matchId, winner) {
-  try {
-    const ref = db.collection('ongoingMatches').doc(matchId);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      return { error: 'no-match' };
-    }
-    // write whatever schema fields your submitResult does:
-    await ref.update({
-      status: 'closed',
-      winner,
-      closedAt: new Date().toISOString()
-    });
-    // optionally move to a "matches" collection, etc.
-    return { matchId, winner };
-  } catch (err) {
-    return { error: err.message };
+async adminCloseMatch(matchId, winner) {
+  const ongoingRef = db.collection('ongoingMatches').doc(matchId);
+  const snap = await ongoingRef.get();
+  if (!snap.exists) {
+    return { error: 'no-match' };
   }
+
+  const data = snap.data();
+  // add your result fields
+  data.winner = winner;
+  data.closedAt = new Date().toISOString();
+  data.status = 'closed';
+
+  // 1) Archive into "matches"
+  await db.collection('matches').doc(matchId).set(data);
+
+  // 2) Remove from ongoingMatches
+  await ongoingRef.delete();
+
+  return { matchId, winner };
 }
 
 /**
