@@ -377,7 +377,7 @@ async function pickPlayer(captainId, userId) {
  * @param {'radiant'|'dire'} winner
  * @returns {{ matchId: string, winner: string }|{ error: string }}
  */
-async adminCloseMatch(matchId, winner) {
+async function adminCloseMatch(matchId, winner) {
   const ongoingRef = db.collection('ongoingMatches').doc(matchId);
   const snap = await ongoingRef.get();
   if (!snap.exists) {
