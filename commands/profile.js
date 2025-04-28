@@ -42,7 +42,7 @@ module.exports = {
             await message.author.send(profileMsg);
             // Public acknowledgement if not in DM channel
             if (message.channel.type !== 'DM') {
-                return message.channel.send("📬 I've sent you your profile in a DM.");
+                return message.channel.send("📬 I've sent you the requested profile in a DM.");
             }
         } catch (err) {
             console.error('[PROFILE] DM failed:', err);
