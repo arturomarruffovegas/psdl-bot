@@ -5,13 +5,13 @@ const matchService = require('../../services/matchService');
 module.exports = {
   name: '!pick',
   async execute(message, args) {
-    // Validate usage
+    // 1) Validate usage
     if (args.length !== 1) {
       return message.channel.send('❌ Usage: `!pick <userId>`');
     }
     const input = args[0].trim();
 
-    // Look up caller
+    // 2) Lookup caller profile
     const profile = await playerService.getPlayerProfileByUsername(
       message.author.username.toLowerCase()
     );
@@ -19,12 +19,11 @@ module.exports = {
       return message.channel.send('❌ You are not registered.');
     }
 
-    // Resolve partial ID in challenge pool
+    // 3) Resolve partial ID in challenge pool
     let pickId = input;
     const current = await matchService.getCurrentMatch();
     if (current && current.type === 'challenge') {
       const pool = current.pool;
-      // Case-insensitive startsWith matching
       const matches = pool.filter(id =>
         id.toLowerCase().startsWith(input.toLowerCase())
       );
@@ -38,10 +37,10 @@ module.exports = {
       }
     }
 
-    // Attempt the pick with resolved ID
+    // 4) Attempt the pick
     const result = await matchService.pickPlayer(profile.id, pickId);
 
-    // Error handling
+    // 5) Handle errors
     if (result.error) {
       switch (result.error) {
         case 'no-match':
@@ -63,38 +62,35 @@ module.exports = {
       }
     }
 
-    // Summary of this pick
+    // 6) Summary for this pick
     const summary = `✅ \`${pickId}\` has been picked for the **${result.team} Team**.`;
 
-    // === Draft complete ===
+    // 7) If finalized, fetch full match to include captains
     if (result.finalized) {
-      const { finalized } = result;
-      const { teams, lobbyName, password } = finalized;
+      const { lobbyName, password } = result.finalized;
       const allPlayers = await playerService.fetchAllPlayers();
-      // Detect challenge vs start by presence of captains
-      const isChallenge =
-        teams.radiant?.captain !== undefined &&
-        teams.dire?.captain !== undefined;
 
-      // Format one side helper
-      const buildSide = (side, label) => {
+      // Get the archived ongoing match (now in ongoingMatches) to include captains
+      const ongoingMatch = await matchService.getOngoingMatchForUser(profile.id);
+      const { teams: fullTeams, type } = ongoingMatch;
+      const isChallenge = type === 'challenge';
+
+      // Helper to build each side, showing captain if challenge
+      const buildSide = (sideObj, label) => {
         let text = `**${label} Team**`;
-        if (isChallenge && side.captain) {
-          text += `\n👑 \`${side.captain}\``;
+        if (isChallenge && sideObj.captain) {
+          text += `\n👑 \`${sideObj.captain}\``;
         }
-        const ids = isChallenge ? side.players : side;
-        for (const id of ids) {
+        const players = isChallenge ? sideObj.players : sideObj;
+        for (const id of players) {
           const p = allPlayers.find(u => u.id === id);
-          const line = p
-            ? `• \`${id}\` — (${p.role.toUpperCase()} - T${p.tier})`
-            : `• \`${id}\``;
-          text += `\n${line}`;
+          text += `\n• \`${id}\` — (${p ? p.role.toUpperCase() : 'UNK'} - T${p ? p.tier : '?'})`;
         }
         return text;
       };
 
-      const radiantText = buildSide(teams.radiant, 'Radiant');
-      const direText = buildSide(teams.dire, 'Dire');
+      const radiantText = buildSide(fullTeams.radiant, 'Radiant');
+      const direText = buildSide(fullTeams.dire, 'Dire');
 
       return message.channel.send(
         `${summary}\n\n🎮 **Match Ready!**\n` +
@@ -106,7 +102,7 @@ module.exports = {
       );
     }
 
-    // === Still drafting: next captains ===
+    // 8) Still drafting: prompt next captain
     const nextCap = result.team === 'Radiant'
       ? current.captain2
       : current.captain1;
